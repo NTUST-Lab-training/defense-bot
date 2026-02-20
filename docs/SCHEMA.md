@@ -1,4 +1,3 @@
-```markdown
 # 實體關聯模型與資料庫設計 (Database Schema)
 
 ## 1. 架構說明與技術選型權衡
@@ -45,4 +44,3 @@ erDiagram
     PROFESSOR ||--o{ STUDENT : "Advises"
     STUDENT ||--o{ DEFENSE_LOG : "Generates"
     DEFENSE_LOCATION ||--o{ DEFENSE_LOG : "Hosts"
-```
