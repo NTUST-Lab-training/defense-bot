@@ -6,6 +6,7 @@
 * **選型考量**: 在此輕量級情境下，SQLite 具備極佳的部署便利性。因缺少 PostgreSQL 原生的 `JSONB` 支援，陣列型態資料（如 `committee_json`）統一宣告為 `TEXT`，交由 Python 後端進行解析與驗證。
 
 ## 2. 實體關聯圖 (ER Diagram)
+
 ```mermaid
 erDiagram
     STUDENT {
@@ -15,18 +16,21 @@ erDiagram
         string thesis_title_en "英文論文題目"
         int advisor_professor_id FK "指導教授 ID"
     }
+
     PROFESSOR {
         int professor_id PK "教授唯一碼"
         string professor_name "教授姓名"
         string professor_title "職稱"
         string department_name "服務單位"
     }
+
     DEFENSE_LOCATION {
         int location_id PK "地點唯一碼"
         string building_name "館舍名稱"
         string room_number "教室編號"
         string full_location_name "完整地點組合"
     }
+
     DEFENSE_LOG {
         int log_id PK "流水號"
         string student_id FK "關聯學生"
@@ -41,5 +45,4 @@ erDiagram
     PROFESSOR ||--o{ STUDENT : "Advises"
     STUDENT ||--o{ DEFENSE_LOG : "Generates"
     DEFENSE_LOCATION ||--o{ DEFENSE_LOG : "Hosts"
-
----
+```
