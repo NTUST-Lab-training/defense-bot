@@ -44,3 +44,4 @@ erDiagram
     PROFESSOR ||--o{ STUDENT : "Advises"
     STUDENT ||--o{ DEFENSE_LOG : "Generates"
     DEFENSE_LOCATION ||--o{ DEFENSE_LOG : "Hosts"
+```
