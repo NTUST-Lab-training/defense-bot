@@ -95,8 +95,9 @@ Server URL: 輸入 http://defense-bot-backend:8088 (請勿使用 localhost)。
 
 選擇專案目錄下的 workflow/defense-bot.yml。
 
- 專案結構 (Project Structure)
-Plaintext
+##  專案結構 (Project Structure)
+
+```text
 defense-bot/
 ├── install.sh              # 🚀 一鍵部署主腳本
 ├── docker-compose.yml      # Backend 容器編排
@@ -120,7 +121,7 @@ defense-bot/
 │
 └── templates/              # 🎨 PPT 模板
     └── defense_template.pptx
- 資料維護 (Data Maintenance)
+資料維護 (Data Maintenance)
 若要新增學生或教授資料，請直接編輯 data/ 目錄下的 CSV 檔案，並重啟後端容器以重新匯入資料庫：
 
 data/professors.csv: name,title,department
