@@ -1,5 +1,5 @@
 ```markdown
-# 🎨 使用者介面與體驗規劃 (UI/UX Design)
+# 使用者介面與體驗規劃 (UI/UX Design)
 
 ## Phase 1: 對話式介面 (Dify Chat UI)
 使用者透過 Dify 提供的 Web Chat 介面與系統互動。
@@ -7,6 +7,6 @@
 * **防呆機制**: 生成前必須列出所有變數供使用者最後確認。
 
 ## Phase 2: 網頁前端規劃 (React / Google A2UI)
-預計於 3 月 Demo 前實作，採用「表單 + 對話」的雙欄式佈局 (Copilot Pattern)。
+採用「表單 + 對話」的雙欄式佈局 (Copilot Pattern)。
 * **雙向資料綁定**: 使用者在右側對話時，左側表單即時更新。
 * **手動覆寫**: 若 AI 辨識錯誤，使用者可直接在表單點擊修改。

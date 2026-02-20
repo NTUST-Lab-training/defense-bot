@@ -1,5 +1,4 @@
-```markdown
-# 🔌 Defense-Bot API 規格文件
+# Defense-Bot API 規格文件
 
 * **Base URL**: `http://localhost:8088`
 * **API Prefix**: `/api/v1`
@@ -29,3 +28,4 @@
   "location_full_text": "第二教學大樓 T2-202會議室",
   "committee_members": ["鄭瑞光 教授 臺灣科技大學電子工程系"]
 }
+```

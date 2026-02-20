@@ -36,8 +36,8 @@ graph TD
         API <-->|SQL Query| DB[(SQLite DB)]
         API -->|Generate| PPT[python-pptx]
     end
-    
     PPT -->|Return URL| Dify
+```
 Workflow: Dify (負責對話邏輯、Slot Filling)
 
 Backend: Python FastAPI (負責資料庫查詢、PPT 生成)
@@ -53,20 +53,23 @@ Docker & Docker Compose
 Git
 
 1. 下載專案
-Bash
+```Bash
 git clone [https://github.com/yoyo27987536/defense-bot.git](https://github.com/yoyo27987536/defense-bot.git)
 cd defense-bot
+```
 2. 環境設定
 複製範例設定檔（預設值即可運作，已避開預設 Port 防止衝突）：
 
-Bash
+```Bash
 cp .env.example .env
+```
 3. 一鍵部署 (One-Click Deploy)
 執行安裝腳本，系統將自動建立網路、下載 Dify 映像檔並啟動所有服務：
 
-Bash
+```Bash
 chmod +x install.sh
 ./install.sh
+```
 4. 驗證服務
 部署完成後，請訪問：
 
@@ -95,8 +98,9 @@ Server URL: 輸入 http://defense-bot-backend:8088 (請勿使用 localhost)。
 
 選擇專案目錄下的 workflow/defense-bot.yml。
 
-📂 專案結構 (Project Structure)
-Plaintext
+##  專案結構 (Project Structure)
+
+```text
 defense-bot/
 ├── install.sh              # 🚀 一鍵部署主腳本
 ├── docker-compose.yml      # Backend 容器編排
@@ -120,12 +124,14 @@ defense-bot/
 │
 └── templates/              # 🎨 PPT 模板
     └── defense_template.pptx
- 資料維護 (Data Maintenance)
+```
+## 資料維護 (Data Maintenance)
 若要新增學生或教授資料，請直接編輯 data/ 目錄下的 CSV 檔案，並重啟後端容器以重新匯入資料庫：
 
 data/professors.csv: name,title,department
 
 data/students.csv: id,name,title_zh,title_en,advisor_name
 
-Bash
+```Bash
 docker compose restart backend
+```
