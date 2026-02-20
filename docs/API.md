@@ -1,4 +1,3 @@
-```markdown
 # Defense-Bot API 規格文件
 
 * **Base URL**: `http://localhost:8088`
