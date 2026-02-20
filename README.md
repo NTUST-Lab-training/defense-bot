@@ -95,7 +95,7 @@ Server URL: 輸入 http://defense-bot-backend:8088 (請勿使用 localhost)。
 
 選擇專案目錄下的 workflow/defense-bot.yml。
 
-📂 專案結構 (Project Structure)
+ 專案結構 (Project Structure)
 Plaintext
 defense-bot/
 ├── install.sh              # 🚀 一鍵部署主腳本
