@@ -36,8 +36,8 @@ graph TD
         API <-->|SQL Query| DB[(SQLite DB)]
         API -->|Generate| PPT[python-pptx]
     end
-```
     PPT -->|Return URL| Dify
+```
 Workflow: Dify (負責對話邏輯、Slot Filling)
 
 Backend: Python FastAPI (負責資料庫查詢、PPT 生成)
