@@ -1,5 +1,7 @@
+import os
 from fastapi import FastAPI, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles # 新增：用來提供檔案下載
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import List
@@ -7,18 +9,16 @@ import json
 
 import models
 from database import engine, get_db
+from services.generator import generate_ppt # 新增：匯入我們的生成器
 
-# 1. 自動建立 SQLite 資料表 (若已存在則不會覆蓋)
 models.Base.metadata.create_all(bind=engine)
 
-# 2. 初始化 FastAPI 應用程式
 app = FastAPI(
     title="Defense-Bot API",
     description="智慧口試佈告生成系統的後端 API",
     version="1.0.0"
 )
 
-# 3. 設定 CORS (允許未來 React 前端跨網域連線)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -27,8 +27,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 新增：設定檔案下載路由
+# 這樣只要訪問 http://127.0.0.1:8088/downloads/檔名.pptx 就能直接下載！
+DOWNLOAD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "downloads"))
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+app.mount("/downloads", StaticFiles(directory=DOWNLOAD_DIR), name="downloads")
+
 # ==========================================
-# Pydantic Schemas (定義請求與回應的資料格式驗證)
+# Pydantic Schemas
 # ==========================================
 class GeneratePPTRequest(BaseModel):
     student_id: str
@@ -42,16 +48,14 @@ class GeneratePPTRequest(BaseModel):
     committee_members: List[str]
 
 # ==========================================
-# API 路由 (Routes)
+# API 路由
 # ==========================================
-
 @app.get("/")
 def root():
-    return {"status": "running", "message": "🚀 Defense-Bot Backend is up and running!"}
+    return {"status": "running", "message": " Defense-Bot Backend is up and running!"}
 
 @app.get("/api/v1/students/lookup")
 def lookup_student(q: str = Query(..., description="學號或姓名"), db: Session = Depends(get_db)):
-    """身分智慧查詢：用學號或姓名找學生與論文題目"""
     students = db.query(models.Student).filter(
         (models.Student.student_id.like(f"%{q}%")) | 
         (models.Student.student_name.like(f"%{q}%"))
@@ -73,17 +77,13 @@ def lookup_student(q: str = Query(..., description="學號或姓名"), db: Sessi
                 "full_text": advisor_text
             }
         })
-        
     return {"status": "success", "matches": matches}
 
 @app.get("/api/v1/professors/search")
 def search_professor(q: str = Query(..., description="教授姓名"), threshold: int = 70, db: Session = Depends(get_db)):
-    """教授模糊搜尋：輸入名字，補全完整職稱與系所"""
-    # 目前先用簡單的 SQL LIKE 實作 (未來可擴充為 fuzz 模糊演算法)
     professors = db.query(models.Professor).filter(
         models.Professor.professor_name.like(f"%{q}%")
     ).all()
-    
     results = []
     for p in professors:
         results.append({
@@ -92,32 +92,26 @@ def search_professor(q: str = Query(..., description="教授姓名"), threshold:
             "full_text": f"{p.professor_name} {p.professor_title} {p.department_name}",
             "similarity_score": 100 
         })
-        
     return {"status": "success", "results": results}
 
 @app.get("/api/v1/locations/search")
 def search_location(q: str = Query(..., description="地點關鍵字"), db: Session = Depends(get_db)):
-    """地點查詢：輸入關鍵字，回傳標準化地點名稱"""
     locations = db.query(models.DefenseLocation).filter(
         (models.DefenseLocation.room_number.like(f"%{q}%")) | 
         (models.DefenseLocation.building_name.like(f"%{q}%")) |
         (models.DefenseLocation.full_location_name.like(f"%{q}%"))
     ).all()
-    
     results = []
     for loc in locations:
         results.append({
             "location_id": loc.location_id,
             "full_location_name": loc.full_location_name
         })
-        
     return {"status": "success", "results": results}
 
 @app.post("/api/v1/defense/generate")
 def generate_defense_ppt(payload: GeneratePPTRequest, db: Session = Depends(get_db)):
-    """一鍵生成口試佈告 (將前端收集好的資料寫入 Log，並觸發 PPT 產出)"""
-    
-    # 將生成紀錄存入資料庫
+    # 1. 將生成紀錄存入資料庫
     new_log = models.DefenseLog(
         student_id=payload.student_id,
         defense_date_text=payload.defense_date_text,
@@ -128,12 +122,17 @@ def generate_defense_ppt(payload: GeneratePPTRequest, db: Session = Depends(get_
     db.commit()
     db.refresh(new_log)
     
-    # TODO: 下一階段會在這裡呼叫 services/generator.py 實際寫入 PPTX
+    # 2. 呼叫我們剛寫好的魔法服務產出 PPT！
+    filename = generate_ppt(payload, new_log.log_id)
+    
+    # 3. 組合下載網址
+    download_url = f"http://127.0.0.1:8088/downloads/{filename}"
+    
     return {
         "status": "success",
-        "message": "資料已確認並紀錄。PPT 生成模組開發中！",
+        "message": "PPT 生成成功！",
         "data": {
             "log_id": new_log.log_id,
-            "download_url": "http://localhost:8088/downloads/defense_mock.pptx"
+            "download_url": download_url
         }
     }
