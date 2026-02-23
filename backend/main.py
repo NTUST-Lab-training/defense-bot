@@ -1,7 +1,7 @@
 import os
 from fastapi import FastAPI, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles # 新增：用來提供檔案下載
+from fastapi.staticfiles import StaticFiles 
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import List
@@ -9,14 +9,27 @@ import json
 
 import models
 from database import engine, get_db
-from services.generator import generate_ppt # 新增：匯入我們的生成器
+from services.generator import generate_ppt
+from dotenv import load_dotenv
 
 models.Base.metadata.create_all(bind=engine)
+# 載入 .env 檔案
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ENV_PATH = os.path.join(BASE_DIR, ".env")
+load_dotenv(ENV_PATH)
 
+# 讀取環境變數，如果沒讀到，就預設給 127.0.0.1 避免程式當掉
+SERVER_URL = os.getenv("SERVER_URL", "http://127.0.0.1:8088")
 app = FastAPI(
     title="Defense-Bot API",
     description="智慧口試佈告生成系統的後端 API",
-    version="1.0.0"
+    version="1.0.0",
+    servers=[
+        {
+            "url": SERVER_URL,  
+            "description": "API 伺服器"
+        }
+    ]
 )
 
 app.add_middleware(
