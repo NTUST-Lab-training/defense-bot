@@ -82,7 +82,7 @@ Dify 控制台: http://localhost/ (首次登入需註冊管理員)
 
 Backend API 文件: http://localhost:8088/docs
 
-⚙️ Dify 設定指南 (重要！)
+Dify 設定指南 (重要！)
 由於 Dify 的安全性設計，您需要手動將後端 API 註冊到 Dify 中：
 
 取得 API 規格: 複製 http://localhost:8088/openapi.json 的完整內容。
@@ -110,27 +110,36 @@ defense-bot/
 ├── install.sh              # 🚀 一鍵部署主腳本
 ├── docker-compose.yml      # 🐳 Backend 容器編排
 ├── .env.example            # 🔐 環境變數範例
-├── README.md               # 📖 專案說明書
+├── README.md               # 📖 專案說明書 (主入口)
+├── .gitignore              # 🙈 Git 忽略清單
+│
+├── docs/                   # 📚 專案文件庫
+│   ├── API.md              # API 規格與呼叫說明
+│   ├── SCHEMA.md           # 資料庫設計與 ER 圖
+│   └── UI_UX.md            # 介面與體驗設計規劃
 │
 ├── workflow/               # ✨ Dify Agent 設定備份
 │   └── defense-bot.yml     # Dify DSL (匯入此檔以還原對話流程)
 │
-├── templates/              # 🎨 PPT 模板庫
+├── templates/              # 🎨 PPT 模板庫 (全域共用)
 │   └── defense_template.pptx
 │
-├── backend/                # 🐍 Python 後端核心
-│   ├── main.py             # 🚦 總機與路由
+├── backend/                # 🐍 Python 後端核心 
+│   ├── main.py             # 🚦 總機與 API 路由入口
 │   ├── models.py           # 🗄️ 資料庫模型定義
-│   ├── schemas.py          # 🛡️ Pydantic 防呆海關
+│   ├── schemas.py          # 🛡️ Pydantic (資料檢核)
 │   ├── seed.py             # 🌱 開機自動播種腳本
 │   ├── database.py         # 🔌 資料庫連線設定
-│   ├── services/           # 🧠 核心邏輯 (PPT 生成)
-│   └── downloads/          # 📥 PPT 產出暫存區
+│   ├── services/           # 🧠 核心邏輯
+│   │   └── generator.py    # python-pptx 排版引擎
+│   ├── downloads/          # 📥 PPT 產出暫存區 
+│   ├── Dockerfile          # 🐳 後端容器建置腳本
+│   └── requirements.txt    # 📦 Python 依賴套件清單
 │
-└── data/                   # 💾 資料與設定檔 
-    ├── defense.db          # SQLite 資料庫 (啟動自動生成)
+└── data/                   # 💾 資料與設定檔
+    ├── defense.db          # SQLite 資料庫 (伺服器啟動自動生成)
     ├── students.csv        # 學生名單
-    └── professors.csv      # 教授名單 
+    └── professors.csv      # 教授名單
 ```
 ## 資料維護 (Data Maintenance)
 若要新增學生或教授資料，請直接編輯 data/ 目錄下的 CSV 檔案，並重啟後端容器以重新匯入資料庫：
