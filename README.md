@@ -29,14 +29,19 @@
 
 ```mermaid
 graph TD
-    User((使用者)) <-->|Chat Interface| Dify[Dify Workflow Container]
+    User((使用者)) <-->|自然對話| Dify[Dify Agent Container]
     
-    subgraph "Docker Network: defense-bot-net"
-        Dify --HTTP Request--> API[Python FastAPI Container]
-        API <-->|SQL Query| DB[(SQLite DB)]
-        API -->|Generate| PPT[python-pptx]
+    subgraph "Backend (FastAPI 防禦性後端)"
+        Dify --"1. 收集與檢核"--> SaveAPI[POST /save_info]
+        SaveAPI --"補全資料"--> DB[(SQLite DB)]
+        
+        Dify --"2. 極簡生成"--> GenAPI[POST /generate <br/> 只收學號]
+        GenAPI --"提取精確資料"--> DB
+        GenAPI --> PPT[python-pptx 生成器]
+        PPT --> DL[StaticFiles 下載伺服器]
     end
-    PPT -->|Return URL| Dify
+    
+    DL --"強制下載連結"--> User
 ```
 Workflow: Dify (負責對話邏輯、Slot Filling)
 
@@ -103,27 +108,29 @@ Server URL: 輸入 http://defense-bot-backend:8088 (請勿使用 localhost)。
 ```text
 defense-bot/
 ├── install.sh              # 🚀 一鍵部署主腳本
-├── docker-compose.yml      # Backend 容器編排
-├── .env.example            # 環境變數範例
-├── README.md               # 專案說明書
+├── docker-compose.yml      # 🐳 Backend 容器編排
+├── .env.example            # 🔐 環境變數範例
+├── README.md               # 📖 專案說明書
 │
-├── workflow/               # ✨ Dify 設定備份
-│   └── defense-bot.yml     # Dify DSL (匯入此檔以還原機器人)
+├── workflow/               # ✨ Dify Agent 設定備份
+│   └── defense-bot.yml     # Dify DSL (匯入此檔以還原對話流程)
 │
-├── backend/                # 🐍 Python 後端原始碼
-│   ├── main.py             # FastAPI Entry Point
-│   ├── database.py         # 資料庫連線與 ORM
-│   ├── services/           # 核心邏輯 (查詢、生成)
-│   ├── Dockerfile
-│   └── requirements.txt
+├── templates/              # 🎨 PPT 模板庫
+│   └── defense_template.pptx
 │
-├── data/                   # 💾 資料儲存區
-│   ├── defense.db          # SQLite 資料庫 (自動生成)
-│   ├── students.csv        # 學生名單 (初始化用)
-│   └── professors.csv      # 教授名單 (初始化用)
+├── backend/                # 🐍 Python 後端核心
+│   ├── main.py             # 🚦 總機與路由
+│   ├── models.py           # 🗄️ 資料庫模型定義
+│   ├── schemas.py          # 🛡️ Pydantic 防呆海關
+│   ├── seed.py             # 🌱 開機自動播種腳本
+│   ├── database.py         # 🔌 資料庫連線設定
+│   ├── services/           # 🧠 核心邏輯 (PPT 生成)
+│   └── downloads/          # 📥 PPT 產出暫存區
 │
-└── templates/              # 🎨 PPT 模板
-    └── defense_template.pptx
+└── data/                   # 💾 資料與設定檔 
+    ├── defense.db          # SQLite 資料庫 (啟動自動生成)
+    ├── students.csv        # 學生名單
+    └── professors.csv      # 教授名單 
 ```
 ## 資料維護 (Data Maintenance)
 若要新增學生或教授資料，請直接編輯 data/ 目錄下的 CSV 檔案，並重啟後端容器以重新匯入資料庫：
