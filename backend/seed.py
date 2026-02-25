@@ -1,37 +1,65 @@
-from database import SessionLocal, engine
+import csv
+import os
+from sqlalchemy.orm import Session
 import models
+from database import SessionLocal, engine
+
+# BASE_DIR 現在是 backend/
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# 往上一層找到專案根目錄 defense-bot/
+PROJECT_ROOT = os.path.dirname(BASE_DIR)
+# 指向 defense-bot/data/
+DATA_DIR = os.path.join(PROJECT_ROOT, "data")
+
+PROFESSORS_CSV = os.path.join(DATA_DIR, "professors.csv")
+STUDENTS_CSV = os.path.join(DATA_DIR, "students.csv")
+# 若有地點資料，也可自行加入 LOCATIONS_CSV = ...
 
 def run_seed():
-    # 0. 確保資料表已經建立 (非常重要的一行！)
-    models.Base.metadata.create_all(bind=engine)
-
     db = SessionLocal()
+    try:
+        print("🔍 啟動資料庫初始化程序...")
+        
+        # ==========================================
+        # 1. 匯入教授資料 (順序很重要！必須先建教授，學生才能綁定指導教授)
+        # ==========================================
+        if os.path.exists(PROFESSORS_CSV):
+            # 使用 utf-8-sig 可以過濾掉 Excel 存檔時可能產生的隱藏 BOM 字元
+            with open(PROFESSORS_CSV, "r", encoding="utf-8-sig") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    # 檢查這名教授是否已經在資料庫裡了 (冪等性)
+                    exists = db.query(models.Professor).filter_by(professor_id=row["professor_id"]).first()
+                    if not exists:
+                        db.add(models.Professor(**row))
+            db.commit()
+            print("✅ 教授資料 (professors.csv) 同步完成！")
+        else:
+            print(f"⚠️ 找不到教授名單：{PROFESSORS_CSV}")
 
-    # 1. 建立教授資料
-    p1 = models.Professor(professor_name="呂政修", professor_title="教授", department_name="臺灣科技大學電子工程系")
-    p2 = models.Professor(professor_name="鄭瑞光", professor_title="教授", department_name="臺灣科技大學電子工程系")
-    p3 = models.Professor(professor_name="吳晉賢", professor_title="教授", department_name="臺灣科技大學電子工程系")
+        # ==========================================
+        # 2. 匯入學生資料
+        # ==========================================
+        if os.path.exists(STUDENTS_CSV):
+            with open(STUDENTS_CSV, "r", encoding="utf-8-sig") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    # 檢查這名學生是否已經在資料庫裡了 (冪等性)
+                    exists = db.query(models.Student).filter_by(student_id=row["student_id"]).first()
+                    if not exists:
+                        db.add(models.Student(**row))
+            db.commit()
+            print("✅ 學生資料 (students.csv) 同步完成！")
+        else:
+            print(f"⚠️ 找不到學生名單：{STUDENTS_CSV}")
 
-    # 2. 建立地點資料
-    l1 = models.DefenseLocation(building_name="第二教學大樓", room_number="T2-202", full_location_name="第二教學大樓 T2-202會議室")
+    except Exception as e:
+        print(f"❌ CSV 資料匯入失敗，請檢查格式：{e}")
+        db.rollback()
+    finally:
+        db.close()
 
-    # 把以上資料加入 DB 並取得 ID
-    db.add_all([p1, p2, p3, l1])
-    db.commit()
-
-    # 3. 建立學生資料 (並綁定指導教授 p1)
-    s1 = models.Student(
-        student_id="M11402165", 
-        student_name="趙祈佑", 
-        thesis_title_zh="智慧口試佈告生成系統", 
-        thesis_title_en="Defense-Bot",
-        advisor_professor_id=p1.professor_id
-    )
-    db.add(s1)
-    db.commit()
-
-    print("✅ 測試資料已成功灌入 SQLite 資料庫 (data/defense.db)！")
-    db.close()
-
+# 單獨測試用
 if __name__ == "__main__":
-    run_seed()    
+    models.Base.metadata.create_all(bind=engine)
+    run_seed()

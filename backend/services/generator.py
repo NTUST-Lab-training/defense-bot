@@ -1,15 +1,19 @@
 import os
 from pptx import Presentation
 
-# 定義路徑
+# 1. BASE_DIR 依然是你的後端目錄 (backend/)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DOWNLOADS_DIR = os.path.join(BASE_DIR, "downloads")
-# 新增：模板資料夾與檔案路徑
-TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
-TEMPLATE_FILE = os.path.join(TEMPLATES_DIR, "defense_template.pptx")
 
-# 確保下載目錄存在
+# 2. 新增 PROJECT_ROOT，往上一層來到專案根目錄 (defense-bot/)
+PROJECT_ROOT = os.path.dirname(BASE_DIR)
+
+# 3. 下載目錄保持在後端裡面 (backend/downloads)
+DOWNLOADS_DIR = os.path.join(BASE_DIR, "downloads")
 os.makedirs(DOWNLOADS_DIR, exist_ok=True)
+
+# 4. 模板目錄從 PROJECT_ROOT (根目錄) 去找！
+TEMPLATES_DIR = os.path.join(PROJECT_ROOT, "templates")
+TEMPLATE_FILE = os.path.join(TEMPLATES_DIR, "defense_template.pptx")
 
 def replace_text_in_slide(slide, replacements):
     """
