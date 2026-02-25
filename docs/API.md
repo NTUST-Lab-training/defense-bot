@@ -47,7 +47,7 @@
 
 ---
 
-## 🔍 公開查詢 API (Public Search)
+##  公開查詢 API (Public Search)
 *(提供給前端表單即時搜尋或未來擴充使用)*
 
 ### 3. 身份智慧查詢 (Lookup Student)
