@@ -43,6 +43,7 @@
   "student_id": "M11402165"
 }
 ```
+* **Response**:
 ```json
 {
   "status": "success",
