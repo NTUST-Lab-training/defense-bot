@@ -15,7 +15,12 @@ from database import engine, get_db
 from services.generator import generate_ppt
 from contextlib import asynccontextmanager
 from seed import run_seed
+# 新增一個 Chat 路由來串接 Dify
+from pydantic import BaseModel
+import requests
 
+class ChatRequest(BaseModel):
+    query: str
 # ==========================================
 # 初始化資料庫 (如果資料表不存在就建立)
 # ==========================================
@@ -292,3 +297,12 @@ def generate_defense_ppt(
         "message": "PPT 生成成功！",
         "download_url": download_url
     }
+@app.post("/api/v1/chat")
+async def chat_proxy(payload: ChatRequest, student_id: str = Depends(get_current_student_id), db: Session = Depends(get_db)):
+    # 這裡實作將訊息轉發給 Dify API 的邏輯
+    # 您可以在這裡獲取資料庫中的 student 資訊，動態組成 inputs 傳給 Dify
+    student = db.query(models.Student).filter(models.Student.student_id == student_id).first()
+    
+    # 呼叫 Dify API 的範例 (請根據您的 Dify 設定填寫)
+    # ... 實作邏輯 ...
+    return {"answer": f"您好 {student.student_name}，我已收到您的訊息：{payload.query}"}
