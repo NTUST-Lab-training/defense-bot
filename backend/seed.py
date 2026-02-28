@@ -13,7 +13,8 @@ DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 
 PROFESSORS_CSV = os.path.join(DATA_DIR, "professors.csv")
 STUDENTS_CSV = os.path.join(DATA_DIR, "students.csv")
-# 若有地點資料，也可自行加入 LOCATIONS_CSV = ...
+# ✨ 新增地點資料的 CSV 路徑
+LOCATIONS_CSV = os.path.join(DATA_DIR, "locations.csv") 
 
 def run_seed():
     db = SessionLocal()
@@ -52,6 +53,22 @@ def run_seed():
             print("✅ 學生資料 (students.csv) 同步完成！")
         else:
             print(f"⚠️ 找不到學生名單：{STUDENTS_CSV}")
+
+        # ==========================================
+        # ✨ 3. 匯入地點資料
+        # ==========================================
+        if os.path.exists(LOCATIONS_CSV):
+            with open(LOCATIONS_CSV, "r", encoding="utf-8-sig") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    # 檢查該地點是否已經在資料庫裡了 (冪等性)
+                    exists = db.query(models.DefenseLocation).filter_by(location_id=row["location_id"]).first()
+                    if not exists:
+                        db.add(models.DefenseLocation(**row))
+            db.commit()
+            print("✅ 地點資料 (locations.csv) 同步完成！")
+        else:
+            print(f"⚠️ 找不到地點資料：{LOCATIONS_CSV}")
 
     except Exception as e:
         print(f"❌ CSV 資料匯入失敗，請檢查格式：{e}")

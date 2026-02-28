@@ -1,98 +1,109 @@
 import os
 import json
 import difflib
+import requests
+import re
 from datetime import datetime
-from fastapi import FastAPI, Depends, Query, HTTPException, Header
-from fastapi.responses import FileResponse
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, Depends, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles 
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from dotenv import load_dotenv
+from typing import List, Optional
 
 import schemas 
 import models
 from database import engine, get_db
 from services.generator import generate_ppt
-from contextlib import asynccontextmanager
 from seed import run_seed
-# 新增一個 Chat 路由來串接 Dify
-from pydantic import BaseModel
-import requests
 
+# ==========================================
+# 請求格式定義 (Pydantic Models) - openapi.json 的核心
+# ==========================================
 class ChatRequest(BaseModel):
     query: str
+    conversation_id: str = ""   # 用來接前端傳來的記憶 ID
+
+# ✨ 新增：統一改為 POST 後，地點查詢的 Request 模型
+class ToolLocationRequest(BaseModel):
+    keyword: str = Field(..., description="使用者輸入的地點關鍵字")
+
+# ✨ 新增：明確定義地點查詢的 Response 模型，避免 Dify 解析失敗
+class LocationResponse(BaseModel):
+    status: str
+    full_location_name: Optional[str] = None
+    suggestions: Optional[List[str]] = None
+    message: Optional[str] = None
+
+# ✨ 為了配合 openapi.json 與 LLM 的不可控性，所有 Array 欄位都降級為 String 處理
+class ToolCommitteeRequest(BaseModel):
+    student_id: str = Field(..., description="學生學號 (必填)")
+    members: str = Field(..., description="教授名字，多位請用逗號或空白分隔，例如：吳晉賢、鄭瑞光")
+
+class ToolSubmitRequest(BaseModel):
+    student_id: str = Field(..., description="學生學號 (必填)")
+    defense_date: str = Field(..., description="口試日期，建議格式 YYYY-MM-DD")
+    defense_time: str = Field(..., description="口試時間，例如 14:00")
+    final_location: str = Field(..., description="驗證過後的完整地點名稱")
+    final_committee_str: str = Field(..., description="驗證過後的委員名單，請用逗號分隔，例如：鄭瑞光 教授, 吳晉賢 副教授")
+
 # ==========================================
-# 初始化資料庫 (如果資料表不存在就建立)
+# 初始化與伺服器設定
 # ==========================================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("啟動中：正在檢查與初始化資料庫...")
     models.Base.metadata.create_all(bind=engine)
-    run_seed() # <--- 啟動時自動讀取 CSV 並把資料塞進資料庫
+    run_seed() 
     yield
     print("伺服器關閉中...")
 
-# 載入 .env 檔案
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ENV_PATH = os.path.join(BASE_DIR, ".env")
 load_dotenv(ENV_PATH)
 
-# 讀取環境變數，如果沒讀到，就預設給 127.0.0.1 避免程式當掉
-SERVER_URL = os.getenv("SERVER_URL", "http://127.0.0.1:8088")
+# 因為您在 Linux VM 上，建議預設 IP 指向 VM 的實體 IP
+SERVER_URL = os.getenv("SERVER_URL", "http://192.168.109.128:8088")
 
 app = FastAPI(
     title="Defense-Bot API",
     lifespan=lifespan,
-    description="智慧口試佈告生成系統的後端 API )",
-    servers=[
-        {
-            "url": SERVER_URL,  
-            "description": "API 伺服器"
-        }
-    ]
+    description="智慧口試佈告生成系統的後端 API",
+    servers=[{"url": SERVER_URL, "description": "API 伺服器"}]
 )
 
-# 設定 CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"], 
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# 設定檔案下載路由 (掛載靜態資料夾)
 DOWNLOAD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "downloads"))
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 app.mount("/downloads", StaticFiles(directory=DOWNLOAD_DIR), name="downloads")
 
-
-# ==========================================
-#  模擬身份驗證攔截器 (Auth Dependency)
-# ==========================================
-def get_current_student_id(x_student_id: str = Header(None, description="模擬登入的學號 (例如: M11402165)")):
+def get_current_student_id(x_student_id: str = Header(None, description="模擬登入的學號")):
     if not x_student_id:
-        raise HTTPException(status_code=401, detail="未登入或缺乏身份憑證 (Missing X-Student-ID Header)")
+        raise HTTPException(status_code=401, detail="未登入或缺乏身份憑證")
     return x_student_id
 
-
 # ==========================================
-# API 路由 (Routes)
+# 前端專用 API (首頁與歷史紀錄保持不變)
 # ==========================================
-
 @app.get("/")
 def root():
-    return {"status": "running", "message": " Defense-Bot Backend is up and running!"}
+    return {"status": "running", "message": "Defense-Bot Backend is up and running!"}
 
-# ------------------------------------------
-#  新增：前端專用 API (個人首頁與歷史紀錄)
-# ------------------------------------------
-@app.get("/api/v1/students/me", summary="取得當前登入學生的個人檔案")
+@app.get("/api/v1/students/me")
 def get_my_profile(student_id: str = Depends(get_current_student_id), db: Session = Depends(get_db)):
     student = db.query(models.Student).filter(models.Student.student_id == student_id).first()
     if not student:
         raise HTTPException(status_code=404, detail="查無此學生資料")
-    
     advisor_text = f"{student.advisor.professor_name} {student.advisor.professor_title} {student.advisor.department_name}" if student.advisor else "尚未分配"
     return {
         "student_id": student.student_id,
@@ -102,94 +113,120 @@ def get_my_profile(student_id: str = Depends(get_current_student_id), db: Sessio
         "advisor": advisor_text
     }
 
-@app.get("/api/v1/defense/history", summary="取得歷史口試佈告紀錄")
+@app.get("/api/v1/defense/history")
 def get_my_history(student_id: str = Depends(get_current_student_id), db: Session = Depends(get_db)):
     logs = db.query(models.DefenseLog).filter(models.DefenseLog.student_id == student_id).order_by(models.DefenseLog.created_at.desc()).all()
-    return [
-        {
-            "log_id": log.log_id,
-            "created_at": log.created_at,
-            "defense_date": log.defense_date_text,
-            "location": log.location_full_text,
-            "download_url": log.generated_file_url
-        }
-        for log in logs
-    ]
+    return [{"log_id": log.log_id, "created_at": log.created_at, "defense_date": log.defense_date_text, "location": log.location_full_text, "download_url": log.generated_file_url} for log in logs]
 
-# ------------------------------------------
-#  學生查詢 API
-# ------------------------------------------
-@app.get("/api/v1/students/lookup")
-def lookup_student(q: str = Query(..., description="學號或姓名"), db: Session = Depends(get_db)):
-    students = db.query(models.Student).filter(
-        (models.Student.student_id.like(f"%{q}%")) | 
-        (models.Student.student_name.like(f"%{q}%"))
-    ).all()
+
+# ==========================================
+# 🤖 Dify Agent 專用 Tools API (ReAct 工作流)
+# ==========================================
+
+# ✨ 這裡已改為 @app.post，並使用 ToolLocationRequest 來接收 JSON Body
+@app.post("/api/v1/tool/query_location", response_model=LocationResponse, summary="Tool 1: 查詢與驗證地點")
+def tool_query_location(payload: ToolLocationRequest, db: Session = Depends(get_db)):
+    print(f"\n==================================================")
+    print(f"➡️ [除錯追蹤] 1. 成功進入 query_location API！")
+    print(f"➡️ [除錯追蹤] 2. 收到的 keyword: {payload.keyword}")
     
-    matches = []
-    for s in students:
-        advisor_text = ""
-        if s.advisor:
-            advisor_text = f"{s.advisor.professor_name} {s.advisor.professor_title} {s.advisor.department_name}"
+    try:
+        keyword = payload.keyword
+        print(f"➡️ [除錯追蹤] 3. 準備開始向 SQLite 資料庫查詢...")
         
-        matches.append({
-            "student_id": s.student_id,
-            "student_name": s.student_name,
-            "thesis_title_zh": s.thesis_title_zh,
-            "thesis_title_en": s.thesis_title_en,
-            "advisor_info": {
-                "professor_name": s.advisor.professor_name if s.advisor else "",
-                "full_text": advisor_text
+        locations = db.query(models.DefenseLocation).filter(
+            (models.DefenseLocation.room_number.ilike(f"%{keyword}%")) |
+            (models.DefenseLocation.full_location_name.ilike(f"%{keyword}%")) |
+            (models.DefenseLocation.building_name.ilike(f"%{keyword}%")) 
+        ).all()
+        
+        print(f"➡️ [除錯追蹤] 4. 資料庫查詢完成！共找到 {len(locations)} 筆資料")
+        
+        if len(locations) == 1:
+            print(f"➡️ [除錯追蹤] 5. 進入單筆命中邏輯，準備回傳 success")
+            return {"status": "success", "full_location_name": locations[0].full_location_name}
+        
+        elif len(locations) > 1:
+            suggestions = [loc.full_location_name for loc in locations[:3]]
+            print(f"➡️ [除錯追蹤] 5. 進入多筆命中邏輯，準備回傳 needs_clarification")
+            return {
+                "status": "needs_clarification", 
+                "suggestions": suggestions,
+                "message": f"找到多個相關地點：{', '.join(suggestions)}。請向使用者確認是哪一個。"
             }
-        })
-    return {"status": "success", "matches": matches}
+        
+        print(f"➡️ [除錯追蹤] 5. 進入找不到邏輯，準備回傳 not_found")
+        return {
+            "status": "not_found", 
+            "message": f"校內資料庫查無「{keyword}」。請向使用者確認是否有錯字，或引導使用者回覆「直接使用這個地點」。"
+        }
 
-@app.get("/api/v1/professors/search")
-def search_professor(q: str = Query(..., description="教授姓名"), threshold: int = 70, db: Session = Depends(get_db)):
-    professors = db.query(models.Professor).filter(
-        models.Professor.professor_name.like(f"%{q}%")
-    ).all()
-    results = []
-    for p in professors:
-        results.append({
-            "professor_id": p.professor_id,
-            "professor_name": p.professor_name,
-            "full_text": f"{p.professor_name} {p.professor_title} {p.department_name}",
-            "similarity_score": 100 
-        })
-    return {"status": "success", "results": results}
-
-@app.get("/api/v1/locations/search")
-def search_location(q: str = Query(..., description="地點關鍵字"), db: Session = Depends(get_db)):
-    locations = db.query(models.DefenseLocation).filter(
-        (models.DefenseLocation.room_number.like(f"%{q}%")) | 
-        (models.DefenseLocation.building_name.like(f"%{q}%")) |
-        (models.DefenseLocation.full_location_name.like(f"%{q}%"))
-    ).all()
-    results = []
-    for loc in locations:
-        results.append({
-            "location_id": loc.location_id,
-            "full_location_name": loc.full_location_name
-        })
-    return {"status": "success", "results": results}
+    except Exception as e:
+        print(f"❌ [除錯追蹤] 崩潰了！發生嚴重錯誤: {str(e)}")
+        # 故意把錯誤往上拋，讓 FastAPI 吐出 500 錯誤
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        print(f"==================================================\n")
 
 
-# ==========================================
-#  核心優化：防呆中繼站 API (日期轉換、模糊糾錯、數量防呆、寫入資料庫)
-# ==========================================
-@app.post("/api/v1/defense/save_info")
-def save_defense_info(
-    payload: schemas.DefenseInfoSave, 
-    student_id: str = Depends(get_current_student_id), # 👈 學號改由 Header 取得
-    db: Session = Depends(get_db)
-):
-    # 1. 檢查這個學生存不存在
-    student = db.query(models.Student).filter(models.Student.student_id == student_id).first()
+@app.post("/api/v1/tool/query_committee", summary="Tool 2: 查詢與糾錯委員名單")
+def tool_query_committee(payload: ToolCommitteeRequest, db: Session = Depends(get_db)):
+    """提供給 Agent 進行委員糾錯、自動補齊指導教授，並篩出找不到的名單"""
+    student = db.query(models.Student).filter(models.Student.student_id == payload.student_id).first()
     if not student:
-        raise HTTPException(status_code=404, detail="查無此學生資料")
+        return {"status": "error", "message": "查無此學生資料"}
 
-    # 2.  自動轉換民國日期
+    raw_members = re.split(r'[，、,\s]+', payload.members)
+    members_list = [m.strip() for m in raw_members if m.strip()]
+
+    all_profs = db.query(models.Professor).all()
+    prof_names = [p.professor_name for p in all_profs]
+    prof_dict = {p.professor_name: p for p in all_profs}
+
+    final_committee = []
+    unmatched = []
+
+    for raw_name in members_list:
+        clean_name = raw_name.replace("教授", "").replace("博士", "").replace("副教授", "").strip()
+        
+        if len(raw_name) >= 4 and ("系" in raw_name or "所" in raw_name or "公司" in raw_name):
+            if raw_name not in final_committee:
+                final_committee.append(raw_name)
+            continue
+
+        matches = difflib.get_close_matches(clean_name, prof_names, n=1, cutoff=0.6)
+        if matches:
+            matched_prof = prof_dict[matches[0]]
+            full_title = f"{matched_prof.professor_name} {matched_prof.professor_title} ({matched_prof.department_name})"
+            if full_title not in final_committee:
+                final_committee.append(full_title)
+        else:
+            unmatched.append(raw_name)
+
+    if student.advisor:
+        advisor_full = f"{student.advisor.professor_name} {student.advisor.professor_title} ({student.advisor.department_name})"
+        if advisor_full not in final_committee:
+            final_committee.append(advisor_full)
+
+    return {
+        "status": "success",
+        "final_committee": final_committee,  
+        "unmatched_names": unmatched,        
+        "is_valid_count": len(final_committee) >= 3,
+        "current_count": len(final_committee)
+    }
+
+
+@app.post("/api/v1/tool/submit_and_generate", summary="Tool 3: 最終儲存並生成 PPT")
+def tool_submit_and_generate(payload: ToolSubmitRequest, db: Session = Depends(get_db)):
+    """Agent 確認所有資料無誤後，一次性寫入資料庫並產出 PPT"""
+    student = db.query(models.Student).filter(models.Student.student_id == payload.student_id).first()
+    if not student:
+        return {"status": "error", "message": "查無此學生資料"}
+        
+    raw_committee = re.split(r'[，、,]+', payload.final_committee_str)
+    final_committee_list = [m.strip() for m in raw_committee if m.strip()]
+
     try:
         dt = datetime.strptime(payload.defense_date, "%Y-%m-%d")
         roc_year = dt.year - 1911
@@ -198,111 +235,109 @@ def save_defense_info(
     except ValueError:
         formatted_date = payload.defense_date 
 
-    # 3.  地點模糊比對補全
-    location = db.query(models.DefenseLocation).filter(
-        (models.DefenseLocation.room_number.ilike(f"%{payload.location_keyword}%")) |
-        (models.DefenseLocation.full_location_name.ilike(f"%{payload.location_keyword}%"))
-    ).first()
-    final_location = location.full_location_name if location else payload.location_keyword
-
-    # 4.  委員名單模糊比對與糾錯
-    all_profs = db.query(models.Professor).all()
-    prof_names = [p.professor_name for p in all_profs]
-    prof_dict = {p.professor_name: p for p in all_profs}
-
-    final_committee = []
-    for raw_name in payload.committee_members:
-        clean_name = raw_name.replace("教授", "").replace("博士", "").strip()
-        matches = difflib.get_close_matches(clean_name, prof_names, n=1, cutoff=0.6)
-        if matches:
-            matched_prof = prof_dict[matches[0]]
-            full_title = f"{matched_prof.professor_name} {matched_prof.professor_title} {matched_prof.department_name}"
-            if full_title not in final_committee:
-                final_committee.append(full_title)
-        else:
-            final_committee.append(f"{raw_name} 教授")
-
-    # 5. 自動補上指導教授！
-    if student.advisor:
-        advisor_full = f"{student.advisor.professor_name} {student.advisor.professor_title} {student.advisor.department_name}"
-        if advisor_full not in final_committee:
-            final_committee.append(advisor_full)
-
-    # 6. 【委員數量防呆檢核】
-    if len(final_committee) < 3:
-        raise HTTPException(
-            status_code=400, 
-            detail=f"委員數量不足！碩士班口試至少需 3 位委員（含指導教授）。目前僅有 {len(final_committee)} 位，請您補充其他委員姓名。"
-        )
-
-    # 7. 寫入資料庫 (作為狀態暫存)
     new_log = models.DefenseLog(
         student_id=student.student_id,
         defense_date_text=formatted_date,
         defense_time_text=payload.defense_time,
-        location_full_text=final_location,
-        committee_json=json.dumps(final_committee, ensure_ascii=False)
+        location_full_text=payload.final_location,
+        committee_json=json.dumps(final_committee_list, ensure_ascii=False)
     )
     db.add(new_log)
     db.commit()
 
-    return {
-        "status": "success", 
-        "message": "資料已確認並安全儲存！系統已完成時間格式化與數量檢核。", 
-        "final_committee": final_committee,
-        "formatted_date": formatted_date
-    }
-
-
-# ==========================================
-#  最終產生 PPT API (只依賴 Header 學號)
-# ==========================================
-@app.post("/api/v1/defense/generate")
-def generate_defense_ppt(
-    student_id: str = Depends(get_current_student_id), # 👈 學號改由 Header 取得
-    db: Session = Depends(get_db)
-):
-    # 1. 從資料庫把剛才 save_info 存好的最新紀錄撈出來
-    log = db.query(models.DefenseLog).filter(models.DefenseLog.student_id == student_id).order_by(models.DefenseLog.log_id.desc()).first()
-    student = db.query(models.Student).filter(models.Student.student_id == student_id).first()
-    
-    if not log or not student:
-        raise HTTPException(status_code=404, detail="找不到口試資料，請先執行 save_info 儲存資訊")
-
     advisor_full = f"{student.advisor.professor_name} {student.advisor.professor_title} {student.advisor.department_name}" if student.advisor else ""
-    
-    # 2. 組裝一份 100% 正確的資料，準備丟給你的 PPT 產生器
     full_data = schemas.FullPPTData(
         student_id=student.student_id,
         student_name=student.student_name,
         thesis_title_zh=student.thesis_title_zh,
         thesis_title_en=student.thesis_title_en,
         advisor_full_text=advisor_full,
-        defense_date_text=log.defense_date_text,
-        defense_time_text=log.defense_time_text,
-        location_full_text=log.location_full_text if hasattr(log, 'location_full_text') and log.location_full_text else "預設地點",
-        committee_members=json.loads(log.committee_json)
+        defense_date_text=formatted_date,
+        defense_time_text=payload.defense_time,
+        location_full_text=payload.final_location,
+        committee_members=final_committee_list
     )
 
-    # 3. 呼叫產出 PPT！
-    filename = generate_ppt(full_data, log.log_id)
-    
-    # 4. 解決無法下載的問題：回傳專屬的下載網址，並更新回資料庫供歷史紀錄使用
+    filename = generate_ppt(full_data, new_log.log_id)
     download_url = f"{SERVER_URL}/downloads/{filename}"
-    log.generated_file_url = download_url
+    
+    new_log.generated_file_url = download_url
     db.commit()
 
     return {
         "status": "success",
-        "message": "PPT 生成成功！",
+        "message": "PPT 佈告已順利生成！",
         "download_url": download_url
     }
+
+# ==========================================
+# 前端對話代理 Proxy (傳遞對話至 Dify)
+# ==========================================
 @app.post("/api/v1/chat")
-async def chat_proxy(payload: ChatRequest, student_id: str = Depends(get_current_student_id), db: Session = Depends(get_db)):
-    # 這裡實作將訊息轉發給 Dify API 的邏輯
-    # 您可以在這裡獲取資料庫中的 student 資訊，動態組成 inputs 傳給 Dify
+def chat_proxy(payload: ChatRequest, student_id: str = Depends(get_current_student_id), db: Session = Depends(get_db)):
+    DIFY_API_KEY = os.getenv("DIFY_API_KEY")
+    DIFY_API_URL = os.getenv("DIFY_API_URL", "https://api.dify.ai/v1/chat-messages")
+
+    if not DIFY_API_KEY:
+        raise HTTPException(status_code=500, detail="後端未設定 Dify API Key")
+
     student = db.query(models.Student).filter(models.Student.student_id == student_id).first()
+    student_name = student.student_name if student else "同學"
+    thesis_title = student.thesis_title_zh if student else "尚未設定題目"
+
+    dify_payload = {
+        "inputs": {
+            "user_name": student_name,
+            "thesis_title": thesis_title,
+            "current_date": datetime.now().strftime("%Y-%m-%d"),
+            "student_id": student_id 
+        },
+        "query": payload.query,
+        "response_mode": "streaming",
+        "user": student_id
+    }
     
-    # 呼叫 Dify API 的範例 (請根據您的 Dify 設定填寫)
-    # ... 實作邏輯 ...
-    return {"answer": f"您好 {student.student_name}，我已收到您的訊息：{payload.query}"}
+    if payload.conversation_id:
+        dify_payload["conversation_id"] = payload.conversation_id
+
+    headers = {
+        "Authorization": f"Bearer {DIFY_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    try:
+        response = requests.post(DIFY_API_URL, json=dify_payload, headers=headers, stream=True)
+        if response.status_code != 200:
+            raise HTTPException(status_code=500, detail=f"Dify 拒絕請求: {response.text}")
+            
+        final_answer = ""
+        conv_id = "" 
+        
+        for line in response.iter_lines():
+            if line:
+                line_str = line.decode('utf-8')
+                if line_str.startswith("data: "):
+                    try:
+                        data = json.loads(line_str[6:]) 
+                        
+                        if data.get("event") in ["agent_message", "message"]:
+                            final_answer += data.get("answer", "")
+                        
+                        elif data.get("event") == "error":
+                            final_answer += f"\n[管家系統提示：{data.get('message', '遭遇未知錯誤')}]"
+                        
+                        if "conversation_id" in data and not conv_id:
+                            conv_id = data["conversation_id"]
+                    except json.JSONDecodeError:
+                        continue
+        
+        if not final_answer.strip():
+            final_answer = "抱歉，管家剛才沒有聽清楚，或是系統連線稍有延遲，請您再說一次好嗎？"
+
+        return {
+            "answer": final_answer,
+            "conversation_id": conv_id 
+        }
+
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(status_code=500, detail="無法連線至 AI 伺服器")
