@@ -27,18 +27,17 @@ class ChatRequest(BaseModel):
     query: str
     conversation_id: str = ""   # 用來接前端傳來的記憶 ID
 
-# ✨ 新增：統一改為 POST 後，地點查詢的 Request 模型
 class ToolLocationRequest(BaseModel):
     keyword: str = Field(..., description="使用者輸入的地點關鍵字")
 
-# ✨ 新增：明確定義地點查詢的 Response 模型，避免 Dify 解析失敗
 class LocationResponse(BaseModel):
     status: str
     full_location_name: Optional[str] = None
     suggestions: Optional[List[str]] = None
     message: Optional[str] = None
+    reference_locations: Optional[List[str]] = None
 
-# ✨ 為了配合 openapi.json 與 LLM 的不可控性，所有 Array 欄位都降級為 String 處理
+
 class ToolCommitteeRequest(BaseModel):
     student_id: str = Field(..., description="學生學號 (必填)")
     members: str = Field(..., description="教授名字，多位請用逗號或空白分隔，例如：吳晉賢、鄭瑞光")
@@ -66,7 +65,7 @@ ENV_PATH = os.path.join(BASE_DIR, ".env")
 load_dotenv(ENV_PATH)
 
 # 因為您在 Linux VM 上，建議預設 IP 指向 VM 的實體 IP
-SERVER_URL = os.getenv("SERVER_URL", "http://192.168.109.128:8088")
+SERVER_URL = os.getenv("SERVER_URL", "http://127.0.0.1:8088")
 
 app = FastAPI(
     title="Defense-Bot API",
@@ -123,51 +122,46 @@ def get_my_history(student_id: str = Depends(get_current_student_id), db: Sessio
 # 🤖 Dify Agent 專用 Tools API (ReAct 工作流)
 # ==========================================
 
-# ✨ 這裡已改為 @app.post，並使用 ToolLocationRequest 來接收 JSON Body
 @app.post("/api/v1/tool/query_location", response_model=LocationResponse, summary="Tool 1: 查詢與驗證地點")
 def tool_query_location(payload: ToolLocationRequest, db: Session = Depends(get_db)):
-    print(f"\n==================================================")
-    print(f"➡️ [除錯追蹤] 1. 成功進入 query_location API！")
-    print(f"➡️ [除錯追蹤] 2. 收到的 keyword: {payload.keyword}")
+    """提供給 Agent 查詢地點，具備自動補全與 LLM 諧音糾錯功能"""
+    keyword = payload.keyword
     
-    try:
-        keyword = payload.keyword
-        print(f"➡️ [除錯追蹤] 3. 準備開始向 SQLite 資料庫查詢...")
-        
-        locations = db.query(models.DefenseLocation).filter(
-            (models.DefenseLocation.room_number.ilike(f"%{keyword}%")) |
-            (models.DefenseLocation.full_location_name.ilike(f"%{keyword}%")) |
-            (models.DefenseLocation.building_name.ilike(f"%{keyword}%")) 
-        ).all()
-        
-        print(f"➡️ [除錯追蹤] 4. 資料庫查詢完成！共找到 {len(locations)} 筆資料")
-        
-        if len(locations) == 1:
-            print(f"➡️ [除錯追蹤] 5. 進入單筆命中邏輯，準備回傳 success")
-            return {"status": "success", "full_location_name": locations[0].full_location_name}
-        
-        elif len(locations) > 1:
-            suggestions = [loc.full_location_name for loc in locations[:3]]
-            print(f"➡️ [除錯追蹤] 5. 進入多筆命中邏輯，準備回傳 needs_clarification")
-            return {
-                "status": "needs_clarification", 
-                "suggestions": suggestions,
-                "message": f"找到多個相關地點：{', '.join(suggestions)}。請向使用者確認是哪一個。"
-            }
-        
-        print(f"➡️ [除錯追蹤] 5. 進入找不到邏輯，準備回傳 not_found")
+    # ✨ 1. 預先準備「全校地點名冊」當作 LLM 的參考書
+    all_locations = db.query(models.DefenseLocation).all()
+    reference_roster = [loc.full_location_name for loc in all_locations]
+    
+    # 2. 既有的資料庫模糊比對 (快速通關)
+    locations = db.query(models.DefenseLocation).filter(
+        (models.DefenseLocation.room_number.ilike(f"%{keyword}%")) |
+        (models.DefenseLocation.full_location_name.ilike(f"%{keyword}%")) |
+        (models.DefenseLocation.building_name.ilike(f"%{keyword}%")) 
+    ).all()
+    
+    # 情況 1：完美命中一筆，直接補全 (不需要給參考書，節省 Token)
+    if len(locations) == 1:
         return {
-            "status": "not_found", 
-            "message": f"校內資料庫查無「{keyword}」。請向使用者確認是否有錯字，或引導使用者回覆「直接使用這個地點」。"
+            "status": "success", 
+            "full_location_name": locations[0].full_location_name,
+            "reference_locations": []
         }
-
-    except Exception as e:
-        print(f"❌ [除錯追蹤] 崩潰了！發生嚴重錯誤: {str(e)}")
-        # 故意把錯誤往上拋，讓 FastAPI 吐出 500 錯誤
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        print(f"==================================================\n")
-
+    
+    # 情況 2：找到多筆，請 Agent 去問使用者
+    elif len(locations) > 1:
+        suggestions = [loc.full_location_name for loc in locations[:3]]
+        return {
+            "status": "needs_clarification", 
+            "suggestions": suggestions,
+            "message": f"找到多個相關地點：{', '.join(suggestions)}。請向使用者確認是哪一個。",
+            "reference_locations": reference_roster # 備用，讓 LLM 了解全貌
+        }
+    
+    # ✨ 情況 3：完全找不到！把整本名冊丟給 LLM 讓它發揮諧音糾錯能力
+    return {
+        "status": "not_found", 
+        "message": f"資料庫直接比對查無「{keyword}」。請啟動諧音糾錯模式，比對 reference_locations。",
+        "reference_locations": reference_roster
+    }
 
 @app.post("/api/v1/tool/query_committee", summary="Tool 2: 查詢與糾錯委員名單")
 def tool_query_committee(payload: ToolCommitteeRequest, db: Session = Depends(get_db)):
@@ -182,6 +176,9 @@ def tool_query_committee(payload: ToolCommitteeRequest, db: Session = Depends(ge
     all_profs = db.query(models.Professor).all()
     prof_names = [p.professor_name for p in all_profs]
     prof_dict = {p.professor_name: p for p in all_profs}
+
+    #  準備一份完整的教授名冊，等一下要當作參考書丟給 LLM
+    reference_roster = [f"{p.professor_name} {p.professor_title} ({p.department_name})" for p in all_profs]
 
     final_committee = []
     unmatched = []
@@ -211,7 +208,9 @@ def tool_query_committee(payload: ToolCommitteeRequest, db: Session = Depends(ge
     return {
         "status": "success",
         "final_committee": final_committee,  
-        "unmatched_names": unmatched,        
+        "unmatched_names": unmatched,
+        # 把全校名單回傳給 LLM 讓他自己做諧音糾錯
+        "reference_roster": reference_roster,        
         "is_valid_count": len(final_committee) >= 3,
         "current_count": len(final_committee)
     }

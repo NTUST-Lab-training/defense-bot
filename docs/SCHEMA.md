@@ -35,10 +35,11 @@ erDiagram
     DEFENSE_LOG {
         int log_id PK "流水號 (Auto Increment)"
         string student_id FK "關聯學生"
-        datetime created_at "生成時間"
+        string location_id FK "關聯地點 (Nullable)"
+        string location_full_text "補全後的地點字串"
+        datetime created_at "生成時間 (server_default: now)"
         string defense_date_text "洗滌後的口試日期 (e.g., 民國115年3月4日(星期三))"
         string defense_time_text "口試時間"
-        string location_full_text "補全後的地點字串"
         string committee_json "糾錯與補全後的委員名單 (JSON String)"
         string generated_file_url "歷史檔案下載連結 (給前端呈現)"
     }
