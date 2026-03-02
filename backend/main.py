@@ -170,7 +170,7 @@ def tool_query_committee(payload: ToolCommitteeRequest, db: Session = Depends(ge
     if not student:
         return {"status": "error", "message": "查無此學生資料"}
 
-    raw_members = re.split(r'[，、,\s]+', payload.members)
+    raw_members = re.split(r'[，、,]+', payload.members)
     members_list = [m.strip() for m in raw_members if m.strip()]
 
     all_profs = db.query(models.Professor).all()
@@ -186,11 +186,10 @@ def tool_query_committee(payload: ToolCommitteeRequest, db: Session = Depends(ge
     for raw_name in members_list:
         clean_name = raw_name.replace("教授", "").replace("博士", "").replace("副教授", "").strip()
         
-        if len(raw_name) >= 4 and ("系" in raw_name or "所" in raw_name or "公司" in raw_name):
+        if len(raw_name) >= 4 and any(k in raw_name for k in ["系", "所", "公司", "院", "中心", "處", "局", "部", " "]):
             if raw_name not in final_committee:
                 final_committee.append(raw_name)
             continue
-
         matches = difflib.get_close_matches(clean_name, prof_names, n=1, cutoff=0.6)
         if matches:
             matched_prof = prof_dict[matches[0]]
