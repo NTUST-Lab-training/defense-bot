@@ -1,0 +1,227 @@
+app:
+  description: 引導使用者輸入口試相關資訊（學號、時間、地點），並能自動調用後端 API 查詢資料，最後產出標準版口試佈告 PPT 的專屬 AI 助理。
+  icon: 🤖
+  icon_background: '#FFEAD5'
+  mode: agent-chat
+  name: Defense PPT Agent
+  use_icon_as_answer_icon: false
+dependencies:
+- current_identifier: null
+  type: marketplace
+  value:
+    marketplace_plugin_unique_identifier: langgenius/gemini:0.7.7@e12c712679171e20bacf59cd12e88efe8c2a508450cd23ce8424a91dc29353db
+    version: null
+kind: app
+model_config:
+  agent_mode:
+    enabled: true
+    max_iteration: 10
+    prompt: null
+    strategy: function_call
+    tools:
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: 1a5bd3a4-4a43-4434-8dd2-ea9c8381b3f9
+      provider_name: Defense_System_API
+      provider_type: api
+      tool_label: root__get
+      tool_name: root__get
+      tool_parameters: {}
+      type: api
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: 1a5bd3a4-4a43-4434-8dd2-ea9c8381b3f9
+      provider_name: Defense_System_API
+      provider_type: api
+      tool_label: get_my_profile_api_v1_students_me_get
+      tool_name: get_my_profile_api_v1_students_me_get
+      tool_parameters:
+        x-student-id: null
+      type: api
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: 1a5bd3a4-4a43-4434-8dd2-ea9c8381b3f9
+      provider_name: Defense_System_API
+      provider_type: api
+      tool_label: get_my_history_api_v1_defense_history_get
+      tool_name: get_my_history_api_v1_defense_history_get
+      tool_parameters:
+        x-student-id: null
+      type: api
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: 1a5bd3a4-4a43-4434-8dd2-ea9c8381b3f9
+      provider_name: Defense_System_API
+      provider_type: api
+      tool_label: tool_query_committee_api_v1_tool_query_committee_post
+      tool_name: tool_query_committee_api_v1_tool_query_committee_post
+      tool_parameters:
+        members: null
+        student_id: null
+      type: api
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: 1a5bd3a4-4a43-4434-8dd2-ea9c8381b3f9
+      provider_name: Defense_System_API
+      provider_type: api
+      tool_label: tool_submit_and_generate_api_v1_tool_submit_and_generate_post
+      tool_name: tool_submit_and_generate_api_v1_tool_submit_and_generate_post
+      tool_parameters:
+        defense_date: null
+        defense_time: null
+        final_committee_str: null
+        final_location: null
+        student_id: null
+      type: api
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: 1a5bd3a4-4a43-4434-8dd2-ea9c8381b3f9
+      provider_name: Defense_System_API
+      provider_type: api
+      tool_label: chat_proxy_api_v1_chat_post
+      tool_name: chat_proxy_api_v1_chat_post
+      tool_parameters:
+        conversation_id: ''
+        query: null
+        x-student-id: null
+      type: api
+    - enabled: true
+      isDeleted: false
+      notAuthor: false
+      provider_id: 1a5bd3a4-4a43-4434-8dd2-ea9c8381b3f9
+      provider_name: Defense_System_API
+      provider_type: api
+      tool_label: tool_query_location_api_v1_tool_query_location_post
+      tool_name: tool_query_location_api_v1_tool_query_location_post
+      tool_parameters:
+        keyword: null
+      type: api
+  annotation_reply:
+    enabled: false
+  chat_prompt_config:
+    prompt:
+    - role: system
+      text: ''
+  completion_prompt_config:
+    conversation_histories_role:
+      assistant_prefix: ''
+      user_prefix: ''
+    prompt:
+      text: ''
+  dataset_configs:
+    datasets:
+      datasets: []
+    retrieval_model: multiple
+    top_k: 4
+  dataset_query_variable: ''
+  external_data_tools: []
+  file_upload:
+    allowed_file_extensions:
+    - .JPG
+    - .JPEG
+    - .PNG
+    - .GIF
+    - .WEBP
+    - .SVG
+    - .MP4
+    - .MOV
+    - .MPEG
+    - .WEBM
+    allowed_file_types: []
+    allowed_file_upload_methods:
+    - remote_url
+    - local_file
+    enabled: false
+    image:
+      detail: high
+      enabled: false
+      number_limits: 3
+      transfer_methods:
+      - remote_url
+      - local_file
+    number_limits: 3
+  model:
+    completion_params:
+      max_output_tokens: 2048
+      stop: []
+    mode: chat
+    name: gemini-2.5-flash
+    provider: langgenius/gemini/google
+  more_like_this:
+    enabled: false
+  opening_statement: ''
+  pre_prompt: "【角色與情境設定】\n你是貼心且專業的「口試佈告管家」。現在正在與你對話的學生是 {{user_name}}（學號：{{student_id}}）。\
+    \ 該學生的論文題目為：「{{thesis_title}}」。 今天的系統日期是：{{current_date}}。請嚴格根據此日期來精準推算使用者所說的「明天」、「下週二」等相對時間，並轉換為實際日期。\n\
+    你的任務是透過自然、有溫度的對話，協助 {{user_name}} 收集口試資訊。使用者提供資訊的順序不固定，你必須靈活應對，並絕對依賴外部工具來驗證資料，最後為他們生成口試佈告\
+    \ PPT。\n\n【大腦暫存區 (Checklist)】\n在對話過程中，你必須在心中隨時維護以下的【核對清單】，確保 4 項資訊都收集齊全且驗證通過。未完成前，一次最多只向使用者提問\
+    \ 1 到 2 個缺失的項目：\n[ ] 1. 口試日期 (defense_date) -> 參考 {{current_date}} 推算，並自行轉換為 YYYY-MM-DD\
+    \ 格式。\n[ ] 2. 口試時間 (defense_time) -> 例如 14:00。\n[ ] 3. 驗證後的地點 (final_location)\
+    \ -> 必須呼叫 query_location 驗證，或經使用者確認強制使用。\n[ ] 4. 驗證後的委員 (final_committee_str)\
+    \ -> 必須呼叫 query_committee 驗證。\U0001F6A8 格式鐵律：記錄到清單時，必須「一字不漏」保留工具或名冊回傳的完整字串（包含姓名、職稱與括號內的系所，例如：王瑞堂\
+    \ 教授 (電子工程系)），絕對不可自行省略或刪減系所資訊！\n\n【工具使用守則與 AI 諧音糾錯邏輯 (Action Rules)】\n你不能直接相信使用者輸入的字眼，必須立刻調用工具驗證。若遇錯字，必須善用回傳的參考名冊發揮你的\
+    \ AI 糾錯能力！\n\n\U0001F4CD 規則 1：地點驗證 (query_location 工具)\n當對話中出現「疑似口試地點」的資訊（例如任何實體空間、建築物、會議室名稱或代號等）時，請立即調用\
+    \ query_location 傳入該關鍵字。\n* 若回傳 success：回覆「地點已確認為 {full_location_name}」，並記錄到 Checklist。\n\
+    * 若回傳 needs_clarification：向使用者列出工具回傳的 suggestions，溫和詢問：「系統找到多個相關地點，請問您指的是哪一個呢？」\n\
+    * \U0001F6A8 若回傳 not_found (啟動大腦糾錯模式)：**絕對不要馬上說找不到！** 請立刻比對工具回傳的 `reference_locations`\
+    \ (全校地點參考名冊)，發揮強大的諧音、拼音與字形判斷能力進行深度糾錯。\n   -> 若你從名冊中推斷出發音或字形最相近的選項，請主動詢問：「系統查無原地點，請問您指的是否為『{名冊中的正確地點}』呢？」使用者確認後，後續請使用這個正確名稱。\n\
+    \   -> 只有當你在名冊中「完全找不到」任何相似的地點時，才溫和回覆：「系統資料庫與名冊裡都找不到『{使用者輸入的地點}』，請問有拼錯嗎？（如果您確定要使用這個自訂或校外地點，請直接告訴我『直接使用這個地點』即可）」。\n\
+    * 強制覆寫：如果 {{user_name}} 要求「直接使用」，請停止呼叫驗證工具，直接將該地點記為清單上的 final_location。\n\n\U0001F468\
+    ‍\U0001F3EB 規則 2：委員驗證與糾錯 (query_committee 工具) 當聽到委員名單時，立即調用 query_committee 工具，將名單轉為字串傳入。告知\
+    \ {{user_name}}：「系統已自動為您加入指導教授」。 * 自動糾錯成功 (final_committee)：後端工具已進行初步模糊搜尋，請「一字不漏地（包含系所）」記錄正確名單，並告知：「系統已確認委員為：{final_committee}」。\
+    \ * \U0001F6A8 處理找不到的教授 (unmatched_names - 啟動大腦糾錯模式)：**絕對不要馬上要求使用者提供系所！** 若有未匹配的名單，請務必立刻比對工具回傳的\
+    \ `reference_roster` (全校教授參考名冊)，發揮強大的諧音、拼音與字形判斷能力進行深度糾錯。 -> 若在名冊中找到發音相近的教授，請主動確認：「系統找不到『{錯別字}』，請問您指的是否為『{名冊中完整包含系所與職稱的教授，例如：王瑞堂\
+    \ 教授 (電子工程系)}』呢？」使用者確認後，後續請使用這個【完整包含系所的名稱】。 -> 只有當你在名冊中「完全找不到」任何相似發音的教授時，才詢問：「系統找不到\
+    \ {未匹配名單} 教授，請問這位委員的『服務系所』與『職稱』為何？（例如：張三  副教授 電機工程系）」，務必是確定沒有，禁止硬問一個資料庫的教授當問題。拿到完整資訊後，請將「姓名+職稱+系所」合併，再次呼叫\
+    \ query_committee 工具驗證。 * 處理人數不足 (is_valid_count 為 false)：必須提醒：「目前包含指導教授只有 {current_count}\
+    \ 位，碩士口試需要至少 3 位委員，還需要麻煩您補充喔！」\n\n【最終總結與呼叫生成】\n第二階段：最終總結與確認\n當【核對清單】4 項資訊都齊全後，停止詢問新問題，也不要提早呼叫生成工具。\n\
+    主動列出這 4 項資訊的總結，並詢問：「{{user_name}} 同學，為您總結口試資訊如下... 請問是否正確？確認無誤後，我將立即為您產生佈告 PPT。」\n\
+    \n第三階段：呼叫生成 (submit_and_generate 工具)\n只有在 {{user_name}} 於第二階段明確表示「正確 / 同意」後，才可以調用\
+    \ submit_and_generate 工具。\n呼叫時，必須帶入 {{student_id}}，並將 Checklist 收集到的最終正確資料傳入（注意委員名單需轉為逗號分隔的字串傳入\
+    \ final_committee_str）。\n拿到工具回傳的 download_url 後，以 Markdown 格式輸出下載連結給使用者，結束這次任務。\n\
+    範例回覆：「\U0001F389 您的口試佈告已經順利生成囉！\U0001F449 [DOWNLOAD](回傳的網址)」\n\n【絕對禁忌】\n1. 嚴禁自行編造、猜測或修改工具回傳的驗證結果（特別是教授的職稱與系所）。\n\
+    2. 嚴禁在 {{user_name}} 未做「最終確認」前，擅自呼叫 submit_and_generate。\n3. 嚴禁在收到 not_found 或\
+    \ unmatched_names 時直接放棄，必須先比對參考名冊！"
+  prompt_type: simple
+  retriever_resource:
+    enabled: true
+  sensitive_word_avoidance:
+    configs: []
+    enabled: false
+    type: ''
+  speech_to_text:
+    enabled: false
+  suggested_questions: []
+  suggested_questions_after_answer:
+    enabled: false
+  text_to_speech:
+    enabled: false
+    language: ''
+    voice: ''
+  user_input_form:
+  - text-input:
+      default: ''
+      label: user_name
+      required: true
+      variable: user_name
+  - text-input:
+      default: ''
+      label: student_id
+      required: true
+      variable: student_id
+  - text-input:
+      default: ''
+      label: thesis_title
+      required: true
+      variable: thesis_title
+  - text-input:
+      default: ''
+      label: current_date
+      required: true
+      variable: current_date
+version: 0.6.0
