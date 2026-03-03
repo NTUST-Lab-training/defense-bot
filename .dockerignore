@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.env
+
+# 產出檔
+backend/downloads/*.pptx
+
+# Git
+.git/
+.gitignore
+
+# 文件
+docs/
+README.md
+
+# 前端（不包含在後端映像中）
+../defense-bot-frontend/
