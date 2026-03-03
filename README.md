@@ -1,107 +1,142 @@
-#  Defense-Bot: 智慧口試佈告生成系統
+# Defense-Bot: 智慧口試佈告生成系統
 
-結合 **AI 對話流程 (Dify)** 與 **自動化排版 (Python)** 的微服務工具。協助研究生透過自然語言對話，快速查詢資料庫、補全教授職稱，並生成對應的口試佈告 PPT。
+結合 **AI 對話流程 (Dify Agent)** 與 **自動化排版 (Python-pptx)** 的微服務工具。協助研究生透過自然語言對話，快速查詢地點、補全教授職稱，並一鍵生成對應的口試佈告 PPT。
 
 ---
 
-##  核心功能 (Key Features)
-本系統依據以下使用者故事開發，旨在解決行政流程痛點：
+##  核心價值與系統亮點 (Key Features & Value Proposition)
 
-1. **身份智慧查詢 (Smart Identity Lookup)**
-   * **功能**: 輸入學號 (e.g., M11402165) 或姓名，系統自動帶出完整論文題目（中英）與指導教授資訊。
-   * **解決**: 避免重複輸入與打錯字的風險。
-2. **教授模糊搜尋與糾錯 (Fuzzy Search)**
-   * **功能**: 輸入教授名字時容許錯字或同音字 (e.g., 輸入「曾瑞光」自動修正為「鄭瑞光」)。
-   * **解決**: 解決因輸入錯誤導致無法對應資料的問題。
-3. **職稱自動補全 (Professor Metadata Auto-fill)**
-   * **功能**: 自動將教授姓名擴充為正式格式 (e.g., 鄭瑞光 教授 臺灣科技大學電子工程系)。
-   * **解決**: 確保輸出的 PPT 符合系所嚴格的格式規範。
-4. **自然語言時空解析 (NLP Context Parsing)**
-   * **功能**: 支援口語輸入 (e.g., "下週五下午三點在 T2-202")，自動轉換為標準日期與地點格式。
-   * **解決**: 提升輸入效率，無需操作繁瑣的日曆介面。
-5. **一鍵生成交付 (One-Click Generation)**
-   * **功能**: 確認資訊無誤後，即時生成排版完美的 `.pptx` 檔案下載連結。
+本系統改善傳統繁瑣的表單填寫與排版流程，透過「AI 語意理解」與「後端強勢防呆」的完美接力，打造流暢且零容錯的使用體驗：
+
+### 1. 意圖驅動的極簡輸入 (Intent-Driven Context Parsing)
+* **融合功能**：身份智慧綁定 + 自然語言時空解析
+* **使用情境**：使用者登入後，系統即透過 `x-student-id` Header 驗證自動綁定其論文題目與指導教授。使用者只需像聊天般輸入口語指令（例如：「*下週五下午三點在 T2-202，委員是鄭瑞洸*」），Dify Agent 便會自動拆解意圖，逐步呼叫後端 Tool API 將資訊精準解析為標準格式。
+* **解決痛點**：徹底免除重複輸入學號、論文題目等冗長資訊的麻煩，更省去操作複雜日曆與下拉選單的認知負擔。
+
+### 2. 零容錯的智慧糾錯與補全 (Zero-Fault Auto-Correction)
+* **融合功能**：模糊搜尋 (Fuzzy Search) + 職稱自動補全 + 地點模糊比對 + 防禦性後端
+* **使用情境**：當使用者打錯字或只給簡稱時，後端會啟動強大的容錯機制。例如，將「曾瑞洸」自動校正為「鄭瑞光」，並補全為「鄭瑞光 教授 (臺灣科技大學電子工程系)」；輸入「T2-202」便自動補全為「第二教學大樓 T2-202會議室」。同時會啟動防呆機制，強制將指導教授加入口試名單中，並回傳完整教授名冊供 LLM 進行諧音糾錯。
+* **解決痛點**：消滅因打錯字或漏填導致的行政退件風險，確保產出的資料符合規範。
+
+### 3. 閉環的自動化交付與資產管理 (Automated Delivery & Asset Management)
+* **融合功能**：一鍵生成交付 + 專屬歷史紀錄儀表板
+* **使用情境**：確認資訊無誤後，系統會即時產出排版完美的 `.pptx` 佈告檔案供一鍵下載，更會將此次生成的完美草稿與檔案連結永久歸檔至資料庫。
+* **解決痛點**：將「用完即丟的聊天機器人」升級為使用者的「個人管家」，實現免重複對話即可隨時透過前端調閱、下載歷史版本。
 
 ---
 
 ##  系統架構 (System Architecture)
-本專案採用 **全本地部署 (Local Deployment)** 策略，透過 Docker Network 串聯 AI 大腦與後端手腳。
+本專案採用 **全本地部署 (Local Deployment)** 策略，透過 Docker Network 串聯 AI 大腦與後端手腳。前端透過 FastAPI 的聊天代理端點與 Dify Agent 溝通，Dify Agent 再以 ReAct 工作流逐步呼叫後端的三支 Tool API 完成任務。
 
 ```mermaid
 graph TD
-    User((使用者)) <-->|自然對話| Dify[Dify Agent Container]
-    
+    User((使用者)) <-->|React 前端| Frontend[Frontend SPA]
+    Frontend <-->|"POST /api/v1/chat (代理)"|Backend
+
     subgraph "Backend (FastAPI 防禦性後端)"
-        Dify --"1. 收集與檢核"--> SaveAPI[POST /save_info]
-        SaveAPI --"補全資料"--> DB[(SQLite DB)]
+        Backend[FastAPI Server] -->|轉發對話| Dify[Dify Agent]
         
-        Dify --"2. 極簡生成"--> GenAPI[POST /generate <br/> 只收學號]
-        GenAPI --"提取精確資料"--> DB
-        GenAPI --> PPT[python-pptx 生成器]
-        PPT --> DL[StaticFiles 下載伺服器]
+        Dify --"Tool 1: 地點查詢與補全"--> LocAPI["POST /api/v1/tool/query_location"]
+        Dify --"Tool 2: 委員糾錯與補齊"--> ComAPI["POST /api/v1/tool/query_committee"]
+        Dify --"Tool 3: 儲存並生成 PPT"--> GenAPI["POST /api/v1/tool/submit_and_generate"]
+        
+        LocAPI --> DB[(SQLite DB)]
+        ComAPI --> DB
+        GenAPI --> DB
+        GenAPI --> PPT[python-pptx 生成引擎]
+        PPT --> DL[StaticFiles 歷史檔案庫]
+        
+        Frontend -.->|"GET /api/v1/students/me"| ProfileAPI[學生資料 API]
+        Frontend -.->|"GET /api/v1/defense/history"| HistoryAPI[歷史紀錄 API]
+        ProfileAPI -.-> DB
+        HistoryAPI -.-> DB
     end
     
-    DL --"強制下載連結"--> User
+    DL --"靜態下載連結"--> User
 ```
-Workflow: Dify (負責對話邏輯、Slot Filling)
+* **前端**: React + Vite SPA（對話介面 + 儀表板）
+* **AI Agent**: Dify（負責語意理解、Slot Filling、ReAct 工具呼叫）
+* **Backend**: Python FastAPI（負責身分驗證、資料洗滌、Fuzzy Search、PPT 渲染、Dify 代理轉發）
+* **Database**: SQLite（輕量化單檔儲存，包含學生、教授、地點及歷史生成紀錄）
 
-Backend: Python FastAPI (負責資料庫查詢、PPT 生成)
+---
 
-Database: SQLite (輕量化單檔儲存)
+##  API 端點總覽 (API Endpoints)
 
- 快速開始 (Quick Start)
+### 前端專用 API
+| 方法 | 端點 | 說明 | 驗證 |
+|------|------|------|------|
+| `GET` | `/` | 健康檢查 | 無 |
+| `GET` | `/api/v1/students/me` | 取得當前登入學生的個人資料與論文題目 | `x-student-id` Header |
+| `GET` | `/api/v1/defense/history` | 取得該學生的口試佈告歷史紀錄與下載連結 | `x-student-id` Header |
+| `POST` | `/api/v1/chat` | 對話代理：將使用者訊息轉發至 Dify Agent 並回傳結果 | `x-student-id` Header |
+
+### Dify Agent 專用 Tool API (ReAct 工作流)
+| 方法 | 端點 | 說明 |
+|------|------|------|
+| `POST` | `/api/v1/tool/query_location` | **Tool 1**：地點查詢與驗證，支援模糊比對與自動補全，找不到時回傳全校名冊供 LLM 諧音糾錯 |
+| `POST` | `/api/v1/tool/query_committee` | **Tool 2**：委員名單糾錯與補齊，自動補全職稱與系所、強制加入指導教授、回傳未匹配名單供 LLM 處理 |
+| `POST` | `/api/v1/tool/submit_and_generate` | **Tool 3**：最終確認後一次性寫入資料庫，自動轉換民國年日期格式並產出 `.pptx` 佈告檔案 |
+
+---
+
+##  快速開始 (Quick Start)
 我們提供了一鍵部署腳本，讓您在 5 分鐘內建立完整的本地環境。
 
-前置需求 (Prerequisites)
-Docker & Docker Compose
+### 前置需求 (Prerequisites)
+* Docker & Docker Compose
+* Git
 
-Git
-
-1. 下載專案
+### 1. 下載專案
 ```Bash
-git clone [https://github.com/yoyo27987536/defense-bot.git](https://github.com/yoyo27987536/defense-bot.git)
+git clone https://github.com/yoyo27987536/defense-bot.git
 cd defense-bot
 ```
-2. 環境設定
-複製範例設定檔（預設值即可運作，已避開預設 Port 防止衝突）：
 
+### 2. 環境設定
+複製範例設定檔（預設值即可運作，已避開預設 Port 防止衝突）：
 ```Bash
 cp .env.example .env
 ```
-3. 一鍵部署 (One-Click Deploy)
-執行安裝腳本，系統將自動建立網路、下載 Dify 映像檔並啟動所有服務：
+主要環境變數說明：
+| 變數名稱 | 說明 | 預設值 |
+|----------|------|--------|
+| `API_PORT` | 後端服務埠號 | `8088` |
+| `SERVER_URL` | PPT 下載連結的對外根網址 | `http://127.0.0.1:8088` |
+| `DIFY_API_KEY` | Dify Agent 的 API 金鑰 | (需手動填入) |
+| `DIFY_API_URL` | Dify Chat API 端點 | `https://api.dify.ai/v1/chat-messages` |
 
+### 3. 一鍵部署 (One-Click Deploy)
+執行安裝腳本，系統將自動建立共享 Docker Network、下載 Dify 映像檔並啟動所有服務：
 ```Bash
 chmod +x install.sh
 ./install.sh
 ```
-4. 驗證服務
+
+### 4. 驗證服務
 部署完成後，請訪問：
+* **Dify 控制台**: `http://localhost/` (首次登入需註冊管理員)
+* **Backend API 文件**: `http://localhost:8088/docs` (請使用 Header 注入 `x-student-id` 進行測試)
 
-Dify 控制台: http://localhost/ (首次登入需註冊管理員)
+---
 
-Backend API 文件: http://localhost:8088/docs
+##  Dify 設定指南 (重要！)
+由於 Dify 的安全性設計與本系統的 Tool API 架構，您需要手動將後端 API 註冊到 Dify 中，讓 Agent 能呼叫三支工具：
 
-Dify 設定指南 (重要！)
-由於 Dify 的安全性設計，您需要手動將後端 API 註冊到 Dify 中：
+1. **取得 API 規格**: 瀏覽器開啟 `http://localhost:8088/openapi.json`，複製完整內容。
+2. **建立自定義工具**:
+   * 登入 Dify > 工具 (Tools) > 自定義 (Custom) > 創建自定義工具。
+   * **Schema**: 貼上剛複製的 OpenAPI JSON（系統會自動識別出三支 Tool：`query_location`、`query_committee`、`submit_and_generate`）。
+   * **Server URL**: 輸入 `http://defense-bot-backend:8088`（Docker 內部網路名稱，請勿使用 localhost）。
+3. **匯入機器人流程**:
+   * 建立一個新的 Chatflow 應用。
+   * 點擊右上角選單 > 匯入 DSL。
+   * 選擇專案目錄下的 `workflow/defense-bot.yml`。
+4. **取得 API 金鑰**:
+   * 在 Dify 應用頁面 > 訪問 API > 複製 API 金鑰。
+   * 將金鑰填入 `.env` 檔案的 `DIFY_API_KEY` 欄位。
 
-取得 API 規格: 複製 http://localhost:8088/openapi.json 的完整內容。
-
-建立自定義工具:
-
-登入 Dify > 工具 (Tools) > 自定義 (Custom) > 創建自定義工具。
-
-Schema: 貼上剛複製的 JSON。
-
-Server URL: 輸入 http://defense-bot-backend:8088 (請勿使用 localhost)。
-
-匯入機器人流程:
-
-建立一個新的 Chatflow 應用。
-
-點擊右上角選單 > 匯入 DSL。
-
-選擇專案目錄下的 workflow/defense-bot.yml。
+---
 
 ##  專案結構 (Project Structure)
 
@@ -109,6 +144,7 @@ Server URL: 輸入 http://defense-bot-backend:8088 (請勿使用 localhost)。
 defense-bot/
 ├── install.sh              # 🚀 一鍵部署主腳本
 ├── docker-compose.yml      # 🐳 Backend 容器編排
+├── pyproject.toml          # 📦 Python 專案元資料與依賴宣告
 ├── .env.example            # 🔐 環境變數範例
 ├── README.md               # 📖 專案說明書 (主入口)
 ├── .gitignore              # 🙈 Git 忽略清單
@@ -124,29 +160,34 @@ defense-bot/
 ├── templates/              # 🎨 PPT 模板庫 (全域共用)
 │   └── defense_template.pptx
 │
-├── backend/                # 🐍 Python 後端核心 
-│   ├── main.py             # 🚦 總機與 API 路由入口
-│   ├── models.py           # 🗄️ 資料庫模型定義
-│   ├── schemas.py          # 🛡️ Pydantic (資料檢核)
-│   ├── seed.py             # 🌱 開機自動播種腳本
-│   ├── database.py         # 🔌 資料庫連線設定
+├── backend/                # 🐍 Python 後端核心
+│   ├── main.py             # 🚦 API 路由總機 (含 Tool API、Chat 代理、Auth 攔截器)
+│   ├── models.py           # 🗄️ SQLAlchemy 資料庫模型 (Professor, Student, DefenseLocation, DefenseLog)
+│   ├── schemas.py          # 🛡️ Pydantic 資料檢核 (DefenseInfoSave, FullPPTData)
+│   ├── seed.py             # 🌱 開機自動播種腳本 (從 CSV 匯入資料庫)
+│   ├── database.py         # 🔌 SQLite 資料庫連線設定
 │   ├── services/           # 🧠 核心邏輯
-│   │   └── generator.py    # python-pptx 排版引擎
-│   ├── downloads/          # 📥 PPT 產出暫存區 
+│   │   └── generator.py    # python-pptx 排版引擎 (讀取模板、替換佔位符)
+│   ├── downloads/          # 📥 PPT 歷史產出暫存區
 │   ├── Dockerfile          # 🐳 後端容器建置腳本
-│   └── requirements.txt    # 📦 Python 依賴套件清單
+│   └── requirements.txt    # 📦 Python 依賴套件清單 (pip freeze)
 │
 └── data/                   # 💾 資料與設定檔
-    ├── defense.db          # SQLite 資料庫 (伺服器啟動自動生成)
+    ├── defense.db          # SQLite 資料庫 (伺服器啟動時自動生成)
     ├── students.csv        # 學生名單
-    └── professors.csv      # 教授名單
+    ├── professors.csv      # 教授名單
+    └── locations.csv       # 口試地點名冊
 ```
-## 資料維護 (Data Maintenance)
-若要新增學生或教授資料，請直接編輯 data/ 目錄下的 CSV 檔案，並重啟後端容器以重新匯入資料庫：
 
-data/professors.csv: name,title,department
+---
 
-data/students.csv: id,name,title_zh,title_en,advisor_name
+##  資料維護 (Data Maintenance)
+若要新增學生、教授或地點資料，請直接編輯 `data/` 目錄下的 CSV 檔案，並重啟後端服務以重新匯入資料庫。播種腳本具備冪等性，不會產生重複資料。
+
+各 CSV 欄位格式如下：
+* `data/professors.csv`: `professor_id,professor_name,professor_title,department_name`
+* `data/students.csv`: `student_id,student_name,thesis_title_zh,thesis_title_en,advisor_id`
+* `data/locations.csv`: `location_id,building_name,room_number,full_location_name`
 
 ```Bash
 docker compose restart backend
