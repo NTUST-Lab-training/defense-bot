@@ -1,0 +1,24 @@
+services:
+  # ==========================================
+  # Python FastAPI 後端 (uv + SQLite)
+  # ==========================================
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: defense-bot-backend
+    restart: unless-stopped
+    ports:
+      - "8088:8088"
+    volumes:
+      # 資料持久化：SQLite DB + CSV 種子資料
+      - ./data:/app/data
+      # PPT 模板
+      - ./templates:/app/templates
+      # PPT 產出檔案持久化
+      - backend-downloads:/app/backend/downloads
+    env_file:
+      - .env
+
+volumes:
+  backend-downloads:
