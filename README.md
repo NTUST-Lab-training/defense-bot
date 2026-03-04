@@ -26,14 +26,20 @@
 ---
 
 ##  系統架構 (System Architecture)
-本專案採用 **全本地部署 (Local Deployment)** 策略，透過 Docker Network 串聯 AI 大腦與後端手腳。前端透過 FastAPI 的聊天代理端點與 Dify Agent 溝通，Dify Agent 再以 ReAct 工作流逐步呼叫後端的三支 Tool API 完成任務。
+本專案採用 **全本地部署 (Local Deployment)** 策略，透過 Docker Network 串聯 AI 大腦與後端手腳。前端 nginx 同時負責 HTTPS 反向代理，將 `/api/` 與 `/downloads/` 路徑轉發至後端，避免直接曝露後端位址。前端透過 FastAPI 的聊天代理端點與 Dify Agent 溝通，Dify Agent 再以 ReAct 工作流逐步呼叫後端的三支 Tool API 完成任務。
 
 ```mermaid
 graph TD
-    User((使用者)) <-->|React 前端| Frontend[Frontend SPA]
-    Frontend <-->|"POST /api/v1/chat (代理)"|Backend
+    User((使用者)) <-->|"HTTPS (443)"| Nginx
 
-    subgraph "Backend (FastAPI 防禦性後端)"
+    subgraph "Frontend Container"
+        Nginx[nginx 反向代理\nHTTP→HTTPS 強制重導] -->|提供 React SPA| SPA[React + Vite SPA]
+    end
+
+    Nginx <-->|"/api/* 轉發"| Backend
+    Nginx <-->|"/downloads/* 轉發"| Backend
+
+    subgraph "Backend Container (FastAPI 防禦性後端)"
         Backend[FastAPI Server] -->|轉發對話| Dify[Dify Agent]
         
         Dify --"Tool 1: 地點查詢與補全"--> LocAPI["POST /api/v1/tool/query_location"]
@@ -44,20 +50,19 @@ graph TD
         ComAPI --> DB
         GenAPI --> DB
         GenAPI --> PPT[python-pptx 生成引擎]
-        PPT --> DL[StaticFiles 歷史檔案庫]
+        PPT --> DL["StaticFiles /downloads/\n(相對路徑，透過 nginx 代理)"]
         
-        Frontend -.->|"GET /api/v1/students/me"| ProfileAPI[學生資料 API]
-        Frontend -.->|"GET /api/v1/defense/history"| HistoryAPI[歷史紀錄 API]
+        SPA -.->|"GET /api/v1/students/me"| ProfileAPI[學生資料 API]
+        SPA -.->|"GET /api/v1/defense/history"| HistoryAPI[歷史紀錄 API]
         ProfileAPI -.-> DB
         HistoryAPI -.-> DB
     end
-    
-    DL --"靜態下載連結"--> User
 ```
-* **前端**: React + Vite SPA（對話介面 + 儀表板）
+* **前端**: React + Vite SPA（對話介面 + 儀表板），由 nginx 容器服務，負責 HTTP→HTTPS 強制重導、TLS 終端與 API 反向代理
 * **AI Agent**: Dify（負責語意理解、Slot Filling、ReAct 工具呼叫）
-* **Backend**: Python FastAPI（負責身分驗證、資料洗滌、Fuzzy Search、PPT 渲染、Dify 代理轉發）
+* **Backend**: Python FastAPI（負責身分驗證、資料洗滌、兩階段 Fuzzy Search、PPT 渲染、Dify 代理轉發）
 * **Database**: SQLite（輕量化單檔儲存，包含學生、教授、地點及歷史生成紀錄）
+* **靜態檔案**: 生成的 PPT 以相對路徑 `/downloads/{filename}` 儲存，透過前端 nginx 反向代理提供下載
 
 ---
 
@@ -102,7 +107,7 @@ cp .env.example .env
 | 變數名稱 | 說明 | 預設值 |
 |----------|------|--------|
 | `API_PORT` | 後端服務埠號 | `8088` |
-| `SERVER_URL` | PPT 下載連結的對外根網址 | `http://127.0.0.1:8088` |
+| `SERVER_URL` | FastAPI Swagger UI 顯示的 API 伺服器根網址（不影響 PPT 下載，下載連結一律以相對路徑回傳） | `http://127.0.0.1:8088` |
 | `DIFY_API_KEY` | Dify Agent 的 API 金鑰 | (需手動填入) |
 | `DIFY_API_URL` | Dify Chat API 端點 | `https://api.dify.ai/v1/chat-messages` |
 
