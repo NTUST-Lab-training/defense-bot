@@ -48,7 +48,7 @@
 ### 3. 取得歷史口試紀錄 (Get My History)
 * **Endpoint**: `GET /api/v1/defense/history`
 * **Auth Required**: **Yes** (`x-student-id` in Header)
-* **說明**: 取得該學生過去生成的所有口試佈告草稿與下載連結，供前端實作「歷史紀錄儀表板」。回傳結果依建立時間降冪排序。
+* **說明**: 取得該學生過去生成的所有口試佈告草稿與下載連結，供前端實作「歷史紀錄儀表板」。回傳結果依建立時間降冪排序。`download_url` 回傳相對路徑（如 `/downloads/filename.pptx`），請透過前端 nginx 反向代理存取。
 * **Response**:
 ```json
 [
@@ -57,7 +57,7 @@
     "created_at": "2026-02-26T14:30:00",
     "defense_date": "民國115年3月4日(星期三)",
     "location": "第二教學大樓 T2-202會議室",
-    "download_url": "http://127.0.0.1:8088/downloads/defense_M11402165_1.pptx"
+    "download_url": "/downloads/defense_M11402165_1.pptx"
   }
 ]
 ```
@@ -65,7 +65,7 @@
 ### 4. 對話代理 (Chat Proxy to Dify Agent)
 * **Endpoint**: `POST /api/v1/chat`
 * **Auth Required**: **Yes** (`x-student-id` in Header)
-* **說明**: 前端對話的核心入口。後端會自動注入當前學生的姓名、論文題目與當前日期作為 Dify Agent 的 `inputs`，並以 Streaming 模式接收 Dify 回應後組裝為完整文字回傳。同時維護 `conversation_id` 以延續多輪對話記憶。
+* **說明**: 前端對話的核心入口。後端會自動注入當前學生的姓名、論文題目、學號與當前日期作為 Dify Agent 的 `inputs`，並以 Streaming 模式接收 Dify 回應後組裝為完整文字回傳。同時維護 `conversation_id` 以延續多輪對話記憶。
 * **Request Body**:
 ```json
 {
@@ -77,6 +77,15 @@
 |------|------|------|
 | `query` | `string` (必填) | 使用者的自然語言訊息 |
 | `conversation_id` | `string` (選填) | Dify 回傳的對話 ID，用於多輪對話延續，首次對話留空 |
+
+* **Dify inputs 注入內容**（後端自動組裝，不需前端傳入）：
+
+| 欄位 | 說明 |
+|------|------|
+| `user_name` | 學生姓名 |
+| `thesis_title` | 中文論文題目 |
+| `student_id` | 學生學號（供 Agent 呼叫 Tool API 時使用） |
+| `current_date` | 當前日期（格式 YYYY-MM-DD） |
 
 * **Response**:
 ```json
@@ -94,17 +103,21 @@
 ### 5. Tool 1：查詢與驗證地點 (Query Location)
 * **Endpoint**: `POST /api/v1/tool/query_location`
 * **Auth Required**: **No** (Dify Agent 直接呼叫)
-* **說明**: 接收使用者輸入的地點關鍵字，依序執行以下邏輯：
-  1. **精確命中**：資料庫模糊比對找到唯一結果 → 直接回傳補全後的完整地點名稱。
-  2. **多筆候選**：找到多個匹配 → 回傳至多 3 筆建議，請 Agent 向使用者確認。
-  3. **查無結果**：回傳整份全校地點名冊 (`reference_locations`)，讓 LLM 發揮諧音糾錯能力自行比對。
+* **說明**: 接收使用者輸入的地點關鍵字，依序執行**兩階段**模糊比對邏輯：
+  1. **第一關：SQL ilike 模糊比對**：對 `room_number`、`full_location_name`、`building_name` 三欄位同時比對。
+     - **命中唯一筆** → 直接回傳 `success`，補全地點名稱。
+     - **命中多筆** → 回傳 `needs_clarification` 與至多 3 筆建議。
+  2. **第二關：`difflib` 模糊比對**（cutoff=0.4）：第一關查無結果時啟動，處理錯字與諧音。
+     - **近似唯一筆** → 直接補全回傳 `success`。
+     - **近似多筆** → 回傳 `needs_clarification`，請 Agent 向使用者確認。
+  3. **兩關都查無結果** → 回傳 `not_found` 與全校地點名冊 (`reference_locations`)，讓 LLM 發揮諧音糾錯能力自行比對。
 * **Request Body**:
 ```json
 {
   "keyword": "T2-202"
 }
 ```
-* **Response (精確命中)**:
+* **Response（第一/二關命中唯一筆 → `success`）**:
 ```json
 {
   "status": "success",
@@ -114,13 +127,23 @@
   "reference_locations": []
 }
 ```
-* **Response (查無結果 → 啟動諧音糾錯模式)**:
+* **Response（命中多筆 → `needs_clarification`）**:
+```json
+{
+  "status": "needs_clarification",
+  "full_location_name": null,
+  "suggestions": ["第二教學大樓 T2-202會議室", "第二教學大樓 T2-210教室"],
+  "message": "找到多個相關地點：....。請向使用者確認是哪一個。",
+  "reference_locations": []
+}
+```
+* **Response（兩關都查無結果 → 啟動 LLM 諧音糾錯模式）**:
 ```json
 {
   "status": "not_found",
   "full_location_name": null,
   "suggestions": null,
-  "message": "資料庫直接比對查無「T2-999」。請啟動諧音糾錯模式，比對 reference_locations。",
+  "message": "伺服器比對查無「T2-999」，請啟動 LLM 諧音糾錯模式，比對 reference_locations。",
   "reference_locations": ["電資館 EE-703-1 實驗室", "國際大樓 IB-201 會議室", "..."]
 }
 ```
@@ -192,13 +215,17 @@
 {
   "status": "success",
   "message": "PPT 佈告已順利生成！",
-  "download_url": "http://127.0.0.1:8088/downloads/defense_M11402165_1.pptx"
+  "download_url": "/downloads/defense_M11402165_1.pptx"
 }
 ```
+
+> **注意**：`download_url` 回傳**相對路徑**，學生需透過前端 nginx 反向代理存取。舊有絕對路徑已在歷史紀錄 API 自動正規化為相對路徑。
 
 ---
 
 ## 靜態檔案服務 (Static File Serving)
-生成的 PPT 檔案存放於 `backend/downloads/` 目錄，透過 FastAPI `StaticFiles` 掛載於 `/downloads` 路徑提供下載。
+生成的 PPT 檔案存放於 `backend/downloads/` 目錄，透過 FastAPI `StaticFiles` 掛載於 `/downloads` 路徑。學生不直接呼叫後端埠號，而是透過前端 nginx 反向代理的 `/downloads/` 路徑存取。
 * **路徑格式**: `GET /downloads/{filename}`
-* **範例**: `http://127.0.0.1:8088/downloads/defense_M11402165_1.pptx`
+* **範例**: `/downloads/defense_M11402165_1.pptx`
+
+> Linux 環境下已在從層主動注冊 `.pptx` 的 MIME 類型 (`application/vnd.openxmlformats-officedocument.presentationml.presentation`)，避免某些 Linux 底層 mimetypes 資料庫不完整導致回傳 `text/plain`。

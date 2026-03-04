@@ -3,8 +3,15 @@ import json
 import difflib
 import requests
 import re
+import mimetypes
 from datetime import datetime
 from contextlib import asynccontextmanager
+
+# 確保 Office Open XML 格式有正確的 MIME 類型
+# 在某些 Linux 環境下 mimetypes 資料庫不完整，不補的話 StaticFiles 會回傳 text/plain
+mimetypes.add_type("application/vnd.openxmlformats-officedocument.presentationml.presentation", ".pptx")
+mimetypes.add_type("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".xlsx")
+mimetypes.add_type("application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".docx")
 
 from fastapi import FastAPI, Depends, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
