@@ -46,5 +46,5 @@ erDiagram
 
     PROFESSOR ||--o{ STUDENT : "Advises"
     STUDENT ||--o{ DEFENSE_LOG : "Generates"
-    DEFENSE_LOCATION ||--o{ DEFENSE_LOG : "Hosts"
+    DEFENSE_LOCATION ||--o{ DEFENSE_LOG : "Hosts (location_id 當前未寫入，僅存 location_full_text)"
 ```
