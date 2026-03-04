@@ -13,7 +13,7 @@ mimetypes.add_type("application/vnd.openxmlformats-officedocument.presentationml
 mimetypes.add_type("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".xlsx")
 mimetypes.add_type("application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".docx")
 
-from fastapi import FastAPI, Depends, HTTPException, Header
+from fastapi import FastAPI, Depends, HTTPException, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -89,6 +89,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.middleware("http")
+async def add_no_cache_to_api(request: Request, call_next):
+    """對所有 /api/ 回應加上防快取標頭，
+    避免瀏覽器用快取的 200 回應繞過登入驗證。"""
+    response = await call_next(request)
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+    return response
+
 DOWNLOAD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "downloads"))
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 app.mount("/downloads", StaticFiles(directory=DOWNLOAD_DIR), name="downloads")
@@ -121,6 +131,10 @@ def get_my_profile(student_id: str = Depends(get_current_student_id), db: Sessio
 
 @app.get("/api/v1/defense/history")
 def get_my_history(student_id: str = Depends(get_current_student_id), db: Session = Depends(get_db)):
+    # 先驗證學生是否存在，避免假學號拿到 200 空陣列繞過前端驗證
+    student = db.query(models.Student).filter(models.Student.student_id == student_id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="查無此學生資料")
     logs = db.query(models.DefenseLog).filter(models.DefenseLog.student_id == student_id).order_by(models.DefenseLog.created_at.desc()).all()
 
     def normalize_url(url: str) -> str:
