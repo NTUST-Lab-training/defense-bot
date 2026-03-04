@@ -115,7 +115,17 @@ def get_my_profile(student_id: str = Depends(get_current_student_id), db: Sessio
 @app.get("/api/v1/defense/history")
 def get_my_history(student_id: str = Depends(get_current_student_id), db: Session = Depends(get_db)):
     logs = db.query(models.DefenseLog).filter(models.DefenseLog.student_id == student_id).order_by(models.DefenseLog.created_at.desc()).all()
-    return [{"log_id": log.log_id, "created_at": log.created_at, "defense_date": log.defense_date_text, "location": log.location_full_text, "download_url": log.generated_file_url} for log in logs]
+
+    def normalize_url(url: str) -> str:
+        """將舊有的後端絕對路徑正規化為相對路徑，確保透過 nginx 反向代理存取"""
+        if url and (url.startswith('http://') or url.startswith('https://')):
+            import re as _re
+            match = _re.search(r'(/downloads/.+)$', url)
+            if match:
+                return match.group(1)
+        return url
+
+    return [{"log_id": log.log_id, "created_at": log.created_at, "defense_date": log.defense_date_text, "location": log.location_full_text, "download_url": normalize_url(log.generated_file_url)} for log in logs]
 
 
 # ==========================================
@@ -277,7 +287,8 @@ def tool_submit_and_generate(payload: ToolSubmitRequest, db: Session = Depends(g
     )
 
     filename = generate_ppt(full_data, new_log.log_id)
-    download_url = f"{SERVER_URL}/downloads/{filename}"
+    # 使用相對路徑，讓前端透過 nginx 反向代理存取，避免直接曝露後端位址
+    download_url = f"/downloads/{filename}"
     
     new_log.generated_file_url = download_url
     db.commit()
