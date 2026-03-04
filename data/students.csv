@@ -1,2 +1,12 @@
 student_id,student_name,thesis_title_zh,thesis_title_en,advisor_id
 M11402165,趙祈佑,智慧口試佈告生成系統,Defense-Bot,P001
+M11409100,陳映璇,邊緣運算影像識別,Edge-Vision-System,P002
+M11409101,林宏志,虛擬化容器排程器,Cloud-Docker-Pilot,P003
+M11409102,吳佩玲,深度學習情緒分析,AI-Sentiment-Analyst,P004
+M11409103,張永翰,自動化漏洞檢測,Auto-Security-Scan,P005
+M11409104,李家豪,多代理人協作系統,Multi-Agent-Sync,P006
+M11409105,郭芷瑄,區塊鏈供應鏈追蹤,Chain-Trace-Global,P007
+M11409106,楊柏鈞,智慧倉儲路徑優化,Smart-Path-Finder,P008
+M11409107,許芳瑜,零信任網路架構,Zero-Trust-Guard,P009
+M11409108,謝政達,語意分割模型研究,Semantic-Segment-AI,P010
+M11409109,曾郁婷,混合雲端資源管理,Hybrid-Cloud-Flow,P005
