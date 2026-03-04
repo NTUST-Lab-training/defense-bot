@@ -115,7 +115,17 @@ def get_my_profile(student_id: str = Depends(get_current_student_id), db: Sessio
 @app.get("/api/v1/defense/history")
 def get_my_history(student_id: str = Depends(get_current_student_id), db: Session = Depends(get_db)):
     logs = db.query(models.DefenseLog).filter(models.DefenseLog.student_id == student_id).order_by(models.DefenseLog.created_at.desc()).all()
-    return [{"log_id": log.log_id, "created_at": log.created_at, "defense_date": log.defense_date_text, "location": log.location_full_text, "download_url": log.generated_file_url} for log in logs]
+
+    def normalize_url(url: str) -> str:
+        """將舊有的後端絕對路徑正規化為相對路徑，確保透過 nginx 反向代理存取"""
+        if url and (url.startswith('http://') or url.startswith('https://')):
+            import re as _re
+            match = _re.search(r'(/downloads/.+)$', url)
+            if match:
+                return match.group(1)
+        return url
+
+    return [{"log_id": log.log_id, "created_at": log.created_at, "defense_date": log.defense_date_text, "location": log.location_full_text, "download_url": normalize_url(log.generated_file_url)} for log in logs]
 
 
 # ==========================================
@@ -124,43 +134,63 @@ def get_my_history(student_id: str = Depends(get_current_student_id), db: Sessio
 
 @app.post("/api/v1/tool/query_location", response_model=LocationResponse, summary="Tool 1: 查詢與驗證地點")
 def tool_query_location(payload: ToolLocationRequest, db: Session = Depends(get_db)):
-    """提供給 Agent 查詢地點，具備自動補全與 LLM 諧音糾錯功能"""
+    """提供給 Agent 查詢地點，具備自動補全與伺服器端模糊糾錯功能"""
     keyword = payload.keyword
-    
-    # ✨ 1. 預先準備「全校地點名冊」當作 LLM 的參考書
+
     all_locations = db.query(models.DefenseLocation).all()
-    reference_roster = [loc.full_location_name for loc in all_locations]
-    
-    # 2. 既有的資料庫模糊比對 (快速通關)
+    all_location_names = [loc.full_location_name for loc in all_locations]
+    loc_dict = {loc.full_location_name: loc for loc in all_locations}
+
+    # 第一關：SQL ilike 精確模糊比對（建號/房號/全名）
     locations = db.query(models.DefenseLocation).filter(
         (models.DefenseLocation.room_number.ilike(f"%{keyword}%")) |
         (models.DefenseLocation.full_location_name.ilike(f"%{keyword}%")) |
-        (models.DefenseLocation.building_name.ilike(f"%{keyword}%")) 
+        (models.DefenseLocation.building_name.ilike(f"%{keyword}%"))
     ).all()
-    
-    # 情況 1：完美命中一筆，直接補全 (不需要給參考書，節省 Token)
+
+    # 情況 1：精確命中一筆，直接補全
     if len(locations) == 1:
         return {
-            "status": "success", 
+            "status": "success",
             "full_location_name": locations[0].full_location_name,
             "reference_locations": []
         }
-    
-    # 情況 2：找到多筆，請 Agent 去問使用者
-    elif len(locations) > 1:
+
+    # 情況 2：找到多筆，請 Agent 向使用者確認
+    if len(locations) > 1:
         suggestions = [loc.full_location_name for loc in locations[:3]]
         return {
-            "status": "needs_clarification", 
+            "status": "needs_clarification",
             "suggestions": suggestions,
             "message": f"找到多個相關地點：{', '.join(suggestions)}。請向使用者確認是哪一個。",
-            "reference_locations": reference_roster # 備用，讓 LLM 了解全貌
+            "reference_locations": []
         }
-    
-    # ✨ 情況 3：完全找不到！把整本名冊丟給 LLM 讓它發揮諧音糾錯能力
+
+    # 第二關：伺服器端 difflib 模糊比對（處理錯字/諧音，與 query_committee 邏輯一致）
+    close_matches = difflib.get_close_matches(keyword, all_location_names, n=3, cutoff=0.4)
+
+    # 情況 3：difflib 找到唯一近似結果，直接補全
+    if len(close_matches) == 1:
+        return {
+            "status": "success",
+            "full_location_name": close_matches[0],
+            "reference_locations": []
+        }
+
+    # 情況 4：difflib 找到多個近似結果，請 Agent 向使用者確認
+    if len(close_matches) > 1:
+        return {
+            "status": "needs_clarification",
+            "suggestions": close_matches,
+            "message": f"找到多個相似地點：{', '.join(close_matches)}。請向使用者確認是哪一個。",
+            "reference_locations": []
+        }
+
+    # 情況 5：兩關都找不到，才把名冊丟給 LLM 做最後的諧音糾錯
     return {
-        "status": "not_found", 
-        "message": f"資料庫直接比對查無「{keyword}」。請啟動諧音糾錯模式，比對 reference_locations。",
-        "reference_locations": reference_roster
+        "status": "not_found",
+        "message": f"伺服器比對查無「{keyword}」，請啟動 LLM 諧音糾錯模式，比對 reference_locations。",
+        "reference_locations": all_location_names
     }
 
 @app.post("/api/v1/tool/query_committee", summary="Tool 2: 查詢與糾錯委員名單")
@@ -257,7 +287,8 @@ def tool_submit_and_generate(payload: ToolSubmitRequest, db: Session = Depends(g
     )
 
     filename = generate_ppt(full_data, new_log.log_id)
-    download_url = f"{SERVER_URL}/downloads/{filename}"
+    # 使用相對路徑，讓前端透過 nginx 反向代理存取，避免直接曝露後端位址
+    download_url = f"/downloads/{filename}"
     
     new_log.generated_file_url = download_url
     db.commit()
