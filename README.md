@@ -26,43 +26,47 @@
 ---
 
 ##  系統架構 (System Architecture)
-本專案採用 **全本地部署 (Local Deployment)** 策略，透過 Docker Network 串聯 AI 大腦與後端手腳。前端 nginx 同時負責 HTTPS 反向代理，將 `/api/` 與 `/downloads/` 路徑轉發至後端，避免直接曝露後端位址。前端透過 FastAPI 的聊天代理端點與 Dify Agent 溝通，Dify Agent 再以 ReAct 工作流逐步呼叫後端的三支 Tool API 完成任務。
+本專案採用 **全本地部署 (Local Deployment)** 策略，由三個獨立容器（Frontend nginx、Backend FastAPI、Dify Agent）組成，各自透過 Docker 部署。前端 nginx 同時負責 HTTPS 反向代理，將 `/api/` 與 `/downloads/` 路徑轉發至後端，避免直接曝露後端位址。使用者透過 SPA 發送訊息，由 FastAPI 代理轉發至 Dify Agent，Dify Agent 再以 ReAct 工作流**回呼**後端的三支 Tool API 完成任務。
 
 ```mermaid
 graph TD
     User((使用者)) <-->|"HTTPS (443)"| Nginx
 
-    subgraph "Frontend Container"
-        Nginx[nginx 反向代理\nHTTP→HTTPS 強制重導] -->|提供 React SPA| SPA[React + Vite SPA]
+    subgraph Frontend["Frontend Container"]
+        Nginx["nginx 反向代理<br/>HTTP→HTTPS 強制重導"] -->|提供 React SPA| SPA[React + Vite SPA]
+    end
+
+    subgraph DifyContainer["Dify (獨立部署)"]
+        Dify["Dify Agent<br/>語意理解 + ReAct 工具呼叫"]
     end
 
     Nginx <-->|"/api/* 轉發"| Backend
-    Nginx <-->|"/downloads/* 轉發"| Backend
+    Nginx -->|"/downloads/* 轉發"| DL
 
-    subgraph "Backend Container (FastAPI 防禦性後端)"
-        Backend[FastAPI Server] -->|轉發對話| Dify[Dify Agent]
-        
-        Dify --"Tool 1: 地點查詢與補全"--> LocAPI["POST /api/v1/tool/query_location"]
-        Dify --"Tool 2: 委員糾錯與補齊"--> ComAPI["POST /api/v1/tool/query_committee"]
-        Dify --"Tool 3: 儲存並生成 PPT"--> GenAPI["POST /api/v1/tool/submit_and_generate"]
-        
+    subgraph BackendContainer["Backend Container (FastAPI 防禦性後端)"]
+        Backend[FastAPI Server]
+
+        LocAPI["POST /api/v1/tool/query_location"]
+        ComAPI["POST /api/v1/tool/query_committee"]
+        GenAPI["POST /api/v1/tool/submit_and_generate"]
+
         LocAPI --> DB[(SQLite DB)]
         ComAPI --> DB
         GenAPI --> DB
         GenAPI --> PPT[python-pptx 生成引擎]
-        PPT --> DL["StaticFiles /downloads/\n(相對路徑，透過 nginx 代理)"]
-        
-        SPA -.->|"GET /api/v1/students/me"| ProfileAPI[學生資料 API]
-        SPA -.->|"GET /api/v1/defense/history"| HistoryAPI[歷史紀錄 API]
-        ProfileAPI -.-> DB
-        HistoryAPI -.-> DB
+        PPT --> DL["StaticFiles /downloads/"]
     end
+
+    Backend -->|"POST 轉發對話 (HTTP)"| Dify
+    Dify --"Tool 1: 地點查詢與補全"--> LocAPI
+    Dify --"Tool 2: 委員糾錯與補齊"--> ComAPI
+    Dify --"Tool 3: 儲存並生成 PPT"--> GenAPI
 ```
-* **前端**: React + Vite SPA（對話介面 + 儀表板），由 nginx 容器服務，負責 HTTP→HTTPS 強制重導、TLS 終端與 API 反向代理
-* **AI Agent**: Dify（負責語意理解、Slot Filling、ReAct 工具呼叫）
+* **前端**: React + Vite SPA（對話介面 + 儀表板），由 nginx 容器獨立服務，負責 HTTP→HTTPS 強制重導、TLS 終端與 API/靜態檔案反向代理
+* **AI Agent**: Dify（獨立部署，負責語意理解、Slot Filling、ReAct 工具呼叫，透過 HTTP 回呼後端 Tool API）
 * **Backend**: Python FastAPI（負責身分驗證、資料洗滌、兩階段 Fuzzy Search、PPT 渲染、Dify 代理轉發）
 * **Database**: SQLite（輕量化單檔儲存，包含學生、教授、地點及歷史生成紀錄）
-* **靜態檔案**: 生成的 PPT 以相對路徑 `/downloads/{filename}` 儲存，透過前端 nginx 反向代理提供下載
+* **靜態檔案**: 生成的 PPT 存放於後端 `backend/downloads/`，以相對路徑 `/downloads/{filename}` 回傳，使用者透過前端 nginx 反向代理的 `/downloads/` 路徑下載（nginx 再轉發至後端 StaticFiles）
 
 ---
 
@@ -106,22 +110,22 @@ cp .env.example .env
 主要環境變數說明：
 | 變數名稱 | 說明 | 預設值 |
 |----------|------|--------|
-| `API_PORT` | 後端服務埠號 | `8088` |
-| `SERVER_URL` | FastAPI Swagger UI 顯示的 API 伺服器根網址（不影響 PPT 下載，下載連結一律以相對路徑回傳） | `http://127.0.0.1:8088` |
+| `SERVER_URL` | FastAPI Swagger UI 顯示的 API 伺服器根網址（不影響 PPT 下載，下載連結一律以相對路徑回傳） | `https://localhost:8088` |
 | `DIFY_API_KEY` | Dify Agent 的 API 金鑰 | (需手動填入) |
-| `DIFY_API_URL` | Dify Chat API 端點 | `https://api.dify.ai/v1/chat-messages` |
+| `DIFY_API_URL` | Dify Chat API 端點 | `http://localhost:8080/v1/chat-messages` |
 
 ### 3. 一鍵部署 (One-Click Deploy)
-執行安裝腳本，系統將自動建立共享 Docker Network、下載 Dify 映像檔並啟動所有服務：
+執行安裝腳本，系統將自動建置後端 Docker 映像檔並啟動 FastAPI 服務：
 ```Bash
 chmod +x install.sh
 ./install.sh
 ```
+> **注意**：此腳本僅部署後端服務。Dify Agent 與前端 nginx 需各自獨立部署（請參考 Dify 官方文件與 `defense-bot-frontend/run.sh`）。
 
 ### 4. 驗證服務
 部署完成後，請訪問：
-* **Dify 控制台**: `http://localhost/` (首次登入需註冊管理員)
 * **Backend API 文件**: `http://localhost:8088/docs` (請使用 Header 注入 `x-student-id` 進行測試)
+* **Dify 控制台**: 請依據您的 Dify 部署方式自行訪問（例如 `http://localhost/`，首次登入需註冊管理員）
 
 ---
 
@@ -174,8 +178,7 @@ defense-bot/
 │   ├── services/           # 🧠 核心邏輯
 │   │   └── generator.py    # python-pptx 排版引擎 (讀取模板、替換佔位符)
 │   ├── downloads/          # 📥 PPT 歷史產出暫存區
-│   ├── Dockerfile          # 🐳 後端容器建置腳本
-│   └── requirements.txt    # 📦 Python 依賴套件清單 (pip freeze)
+│   └── Dockerfile          # 🐳 後端容器建置腳本
 │
 └── data/                   # 💾 資料與設定檔
     ├── defense.db          # SQLite 資料庫 (伺服器啟動時自動生成)

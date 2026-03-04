@@ -18,9 +18,10 @@ graph LR
 
 ## 頁面一：登入頁面 (Login)
 * **路由**: `/`
-* **功能**: 使用者輸入「真實姓名」與「學號」後登入系統。
+* **功能**: 使用者輸入「學號」後登入系統。
 * **技術細節**:
-  - 學號與姓名存入 `localStorage`（`studentId`、`studentName`），作為後續所有 API 呼叫的身分憑證。
+  - 學號存入 `localStorage`（`studentId`），作為後續所有 API 呼叫的身分憑證。
+  - 學生姓名於登入後由 Dashboard 頁面透過 `GET /api/v1/students/me` API 取得，另存為 `student_name` 供 ChatRoom 使用。
   - 登入後自動導向 `/dashboard`。
 * **UI 風格**: 置中卡片式表單，圓角陰影，簡潔現代。
 

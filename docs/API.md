@@ -228,4 +228,4 @@
 * **路徑格式**: `GET /downloads/{filename}`
 * **範例**: `/downloads/defense_M11402165_1.pptx`
 
-> Linux 環境下已在從層主動注冊 `.pptx` 的 MIME 類型 (`application/vnd.openxmlformats-officedocument.presentationml.presentation`)，避免某些 Linux 底層 mimetypes 資料庫不完整導致回傳 `text/plain`。
+> Linux 環境下已在程式層主動註冊 `.pptx` 的 MIME 類型 (`application/vnd.openxmlformats-officedocument.presentationml.presentation`)，避免某些 Linux 底層 mimetypes 資料庫不完整導致回傳 `text/plain`。
