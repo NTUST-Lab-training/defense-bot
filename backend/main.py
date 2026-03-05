@@ -16,6 +16,7 @@ mimetypes.add_type("application/vnd.openxmlformats-officedocument.wordprocessing
 from fastapi import FastAPI, Depends, HTTPException, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from dotenv import load_dotenv
@@ -101,12 +102,53 @@ async def add_no_cache_to_api(request: Request, call_next):
 
 DOWNLOAD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "downloads"))
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-app.mount("/downloads", StaticFiles(directory=DOWNLOAD_DIR), name="downloads")
+# 用需認證的 API endpoint 提供下載
 
 def get_current_student_id(x_student_id: str = Header(None, description="模擬登入的學號")):
     if not x_student_id:
         raise HTTPException(status_code=401, detail="未登入或缺乏身份憑證")
     return x_student_id
+
+# ==========================================
+#  需認證的檔案下載 API（取代原本的 StaticFiles）
+# ==========================================
+@app.get("/api/v1/downloads/{filename}")
+def authenticated_download(
+    filename: str,
+    student_id: str = Depends(get_current_student_id),
+    db: Session = Depends(get_db)
+):
+    """需要身分驗證的檔案下載端點，只允許學生下載自己的檔案"""
+    # 安全檢查：防止路徑遍歷攻擊
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="無效的檔案名稱")
+
+    # 查詢此學生的所有紀錄，只比對檔名部分，相容舊格式（http://...）與新格式（/api/v1/...）
+    logs = db.query(models.DefenseLog).filter(
+        models.DefenseLog.student_id == student_id
+    ).all()
+
+    log = None
+    for l in logs:
+        stored_url = (l.generated_file_url or '').strip()
+        # 取出 URL 最後一段作為檔名比對
+        stored_filename = stored_url.rstrip('/').split('/')[-1]
+        if stored_filename == filename:
+            log = l
+            break
+
+    if not log:
+        raise HTTPException(status_code=403, detail="無權限存取此檔案")
+
+    file_path = os.path.join(DOWNLOAD_DIR, filename)
+    if not os.path.isfile(file_path):
+        raise HTTPException(status_code=404, detail="檔案不存在")
+
+    return FileResponse(
+        file_path,
+        filename=filename,
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    )
 
 # ==========================================
 # 前端專用 API (首頁與歷史紀錄保持不變)
@@ -138,12 +180,18 @@ def get_my_history(student_id: str = Depends(get_current_student_id), db: Sessio
     logs = db.query(models.DefenseLog).filter(models.DefenseLog.student_id == student_id).order_by(models.DefenseLog.created_at.desc()).all()
 
     def normalize_url(url: str) -> str:
-        """將舊有的後端絕對路徑正規化為相對路徑，確保透過 nginx 反向代理存取"""
-        if url and (url.startswith('http://') or url.startswith('https://')):
-            import re as _re
-            match = _re.search(r'(/downloads/.+)$', url)
+        """將所有格式的下載路徑統一為需認證的 /api/v1/downloads/ 路徑"""
+        if not url:
+            return url
+        import re as _re
+        # 絕對路徑 → 提取檔名部分
+        if url.startswith('http://') or url.startswith('https://'):
+            match = _re.search(r'/downloads/(.+)$', url)
             if match:
-                return match.group(1)
+                return f"/api/v1/downloads/{match.group(1)}"
+        # 舊格式 /downloads/xxx → 新格式 /api/v1/downloads/xxx
+        if url.startswith('/downloads/') and not url.startswith('/api/'):
+            return f"/api/v1{url}"
         return url
 
     return [{"log_id": log.log_id, "created_at": log.created_at, "defense_date": log.defense_date_text, "location": log.location_full_text, "download_url": normalize_url(log.generated_file_url)} for log in logs]
@@ -308,8 +356,8 @@ def tool_submit_and_generate(payload: ToolSubmitRequest, db: Session = Depends(g
     )
 
     filename = generate_ppt(full_data, new_log.log_id)
-    # 使用相對路徑，讓前端透過 nginx 反向代理存取，避免直接曝露後端位址
-    download_url = f"/downloads/{filename}"
+    # 使用需認證的 API 路徑，確保只有本人能下載
+    download_url = f"/api/v1/downloads/{filename}"
     
     new_log.generated_file_url = download_url
     db.commit()
