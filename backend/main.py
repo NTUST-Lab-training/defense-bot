@@ -208,7 +208,31 @@ def tool_query_location(payload: ToolLocationRequest, db: Session = Depends(get_
 
     all_locations = db.query(models.DefenseLocation).all()
     all_location_names = [loc.full_location_name for loc in all_locations]
-    loc_dict = {loc.full_location_name: loc for loc in all_locations}
+
+    # 正規化函式：移除連字號/全形連字號/空白，轉小寫
+    # 目的：讓「IB101」能精確比對到資料庫中的「IB-101」
+    def normalize(s: str) -> str:
+        return re.sub(r'[\s\-\u2010-\u2015\u2212\uFF0D]+', '', s).lower()
+
+    keyword_norm = normalize(keyword)
+
+    # 第零關：以正規化房號做精確比對（最優先，處理省略連字號的輸入）
+    # 例：「IB101」→ normalize → 「ib101」，比對 room_number「IB-101」→「ib101」→ 完全吻合
+    room_exact = [loc for loc in all_locations if normalize(loc.room_number) == keyword_norm]
+    if len(room_exact) == 1:
+        return {"status": "success", "full_location_name": room_exact[0].full_location_name, "reference_locations": []}
+
+    # 若正規化精確比對命中多筆（同棟不同室），以 SequenceMatcher 分數取最佳
+    if len(room_exact) > 1:
+        scored_exact = sorted(
+            room_exact,
+            key=lambda loc: difflib.SequenceMatcher(None, keyword_norm, normalize(loc.room_number)).ratio(),
+            reverse=True
+        )
+        best, second = scored_exact[0], scored_exact[1]
+        if difflib.SequenceMatcher(None, keyword_norm, normalize(best.full_location_name)).ratio() > \
+           difflib.SequenceMatcher(None, keyword_norm, normalize(second.full_location_name)).ratio():
+            return {"status": "success", "full_location_name": best.full_location_name, "reference_locations": []}
 
     # 第一關：SQL ilike 精確模糊比對（建號/房號/全名）
     locations = db.query(models.DefenseLocation).filter(
@@ -225,21 +249,23 @@ def tool_query_location(payload: ToolLocationRequest, db: Session = Depends(get_
             "reference_locations": []
         }
 
-    # 情況 2：找到多筆，先以相似度排序，若最佳結果明顯勝出就直接補全
+    # 情況 2：找到多筆，以正規化房號相似度排序（房號優先，全名次之）
     if len(locations) > 1:
-        def similarity(name):
-            return difflib.SequenceMatcher(None, keyword.lower(), name.lower()).ratio()
+        def similarity(loc):
+            room_score = difflib.SequenceMatcher(None, keyword_norm, normalize(loc.room_number)).ratio()
+            name_score = difflib.SequenceMatcher(None, keyword_norm, normalize(loc.full_location_name)).ratio()
+            return room_score * 0.7 + name_score * 0.3
 
         scored = sorted(
-            [(loc.full_location_name, similarity(loc.full_location_name)) for loc in locations],
+            [(loc.full_location_name, similarity(loc)) for loc in locations],
             key=lambda x: x[1],
             reverse=True
         )
         best_name, best_score = scored[0]
         second_score = scored[1][1] if len(scored) > 1 else 0.0
 
-        # 最佳結果得分 >= 0.5 且 明顯高於第二名（差距 >= 0.2），視為唯一命中
-        if best_score >= 0.5 and (best_score - second_score) >= 0.2:
+        # 最佳結果明顯勝出，視為唯一命中
+        if best_score >= 0.4 and (best_score - second_score) >= 0.1:
             return {
                 "status": "success",
                 "full_location_name": best_name,
