@@ -16,6 +16,7 @@ mimetypes.add_type("application/vnd.openxmlformats-officedocument.wordprocessing
 from fastapi import FastAPI, Depends, HTTPException, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from dotenv import load_dotenv
@@ -101,12 +102,53 @@ async def add_no_cache_to_api(request: Request, call_next):
 
 DOWNLOAD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "downloads"))
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-app.mount("/downloads", StaticFiles(directory=DOWNLOAD_DIR), name="downloads")
+# 用需認證的 API endpoint 提供下載
 
 def get_current_student_id(x_student_id: str = Header(None, description="模擬登入的學號")):
     if not x_student_id:
         raise HTTPException(status_code=401, detail="未登入或缺乏身份憑證")
     return x_student_id
+
+# ==========================================
+#  需認證的檔案下載 API（取代原本的 StaticFiles）
+# ==========================================
+@app.get("/api/v1/downloads/{filename}")
+def authenticated_download(
+    filename: str,
+    student_id: str = Depends(get_current_student_id),
+    db: Session = Depends(get_db)
+):
+    """需要身分驗證的檔案下載端點，只允許學生下載自己的檔案"""
+    # 安全檢查：防止路徑遍歷攻擊
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="無效的檔案名稱")
+
+    # 查詢此學生的所有紀錄，只比對檔名部分，相容舊格式（http://...）與新格式（/api/v1/...）
+    logs = db.query(models.DefenseLog).filter(
+        models.DefenseLog.student_id == student_id
+    ).all()
+
+    log = None
+    for l in logs:
+        stored_url = (l.generated_file_url or '').strip()
+        # 取出 URL 最後一段作為檔名比對
+        stored_filename = stored_url.rstrip('/').split('/')[-1]
+        if stored_filename == filename:
+            log = l
+            break
+
+    if not log:
+        raise HTTPException(status_code=403, detail="無權限存取此檔案")
+
+    file_path = os.path.join(DOWNLOAD_DIR, filename)
+    if not os.path.isfile(file_path):
+        raise HTTPException(status_code=404, detail="檔案不存在")
+
+    return FileResponse(
+        file_path,
+        filename=filename,
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    )
 
 # ==========================================
 # 前端專用 API (首頁與歷史紀錄保持不變)
@@ -138,12 +180,18 @@ def get_my_history(student_id: str = Depends(get_current_student_id), db: Sessio
     logs = db.query(models.DefenseLog).filter(models.DefenseLog.student_id == student_id).order_by(models.DefenseLog.created_at.desc()).all()
 
     def normalize_url(url: str) -> str:
-        """將舊有的後端絕對路徑正規化為相對路徑，確保透過 nginx 反向代理存取"""
-        if url and (url.startswith('http://') or url.startswith('https://')):
-            import re as _re
-            match = _re.search(r'(/downloads/.+)$', url)
+        """將所有格式的下載路徑統一為需認證的 /api/v1/downloads/ 路徑"""
+        if not url:
+            return url
+        import re as _re
+        # 絕對路徑 → 提取檔名部分
+        if url.startswith('http://') or url.startswith('https://'):
+            match = _re.search(r'/downloads/(.+)$', url)
             if match:
-                return match.group(1)
+                return f"/api/v1/downloads/{match.group(1)}"
+        # 舊格式 /downloads/xxx → 新格式 /api/v1/downloads/xxx
+        if url.startswith('/downloads/') and not url.startswith('/api/'):
+            return f"/api/v1{url}"
         return url
 
     return [{"log_id": log.log_id, "created_at": log.created_at, "defense_date": log.defense_date_text, "location": log.location_full_text, "download_url": normalize_url(log.generated_file_url)} for log in logs]
@@ -160,7 +208,31 @@ def tool_query_location(payload: ToolLocationRequest, db: Session = Depends(get_
 
     all_locations = db.query(models.DefenseLocation).all()
     all_location_names = [loc.full_location_name for loc in all_locations]
-    loc_dict = {loc.full_location_name: loc for loc in all_locations}
+
+    # 正規化函式：移除連字號/全形連字號/空白，轉小寫
+    # 目的：讓「IB101」能精確比對到資料庫中的「IB-101」
+    def normalize(s: str) -> str:
+        return re.sub(r'[\s\-\u2010-\u2015\u2212\uFF0D]+', '', s).lower()
+
+    keyword_norm = normalize(keyword)
+
+    # 第零關：以正規化房號做精確比對（最優先，處理省略連字號的輸入）
+    # 例：「IB101」→ normalize → 「ib101」，比對 room_number「IB-101」→「ib101」→ 完全吻合
+    room_exact = [loc for loc in all_locations if normalize(loc.room_number) == keyword_norm]
+    if len(room_exact) == 1:
+        return {"status": "success", "full_location_name": room_exact[0].full_location_name, "reference_locations": []}
+
+    # 若正規化精確比對命中多筆（同棟不同室），以 SequenceMatcher 分數取最佳
+    if len(room_exact) > 1:
+        scored_exact = sorted(
+            room_exact,
+            key=lambda loc: difflib.SequenceMatcher(None, keyword_norm, normalize(loc.room_number)).ratio(),
+            reverse=True
+        )
+        best, second = scored_exact[0], scored_exact[1]
+        if difflib.SequenceMatcher(None, keyword_norm, normalize(best.full_location_name)).ratio() > \
+           difflib.SequenceMatcher(None, keyword_norm, normalize(second.full_location_name)).ratio():
+            return {"status": "success", "full_location_name": best.full_location_name, "reference_locations": []}
 
     # 第一關：SQL ilike 精確模糊比對（建號/房號/全名）
     locations = db.query(models.DefenseLocation).filter(
@@ -177,9 +249,30 @@ def tool_query_location(payload: ToolLocationRequest, db: Session = Depends(get_
             "reference_locations": []
         }
 
-    # 情況 2：找到多筆，請 Agent 向使用者確認
+    # 情況 2：找到多筆，以正規化房號相似度排序（房號優先，全名次之）
     if len(locations) > 1:
-        suggestions = [loc.full_location_name for loc in locations[:3]]
+        def similarity(loc):
+            room_score = difflib.SequenceMatcher(None, keyword_norm, normalize(loc.room_number)).ratio()
+            name_score = difflib.SequenceMatcher(None, keyword_norm, normalize(loc.full_location_name)).ratio()
+            return room_score * 0.7 + name_score * 0.3
+
+        scored = sorted(
+            [(loc.full_location_name, similarity(loc)) for loc in locations],
+            key=lambda x: x[1],
+            reverse=True
+        )
+        best_name, best_score = scored[0]
+        second_score = scored[1][1] if len(scored) > 1 else 0.0
+
+        # 最佳結果明顯勝出，視為唯一命中
+        if best_score >= 0.4 and (best_score - second_score) >= 0.1:
+            return {
+                "status": "success",
+                "full_location_name": best_name,
+                "reference_locations": []
+            }
+
+        suggestions = [name for name, _ in scored[:3]]
         return {
             "status": "needs_clarification",
             "suggestions": suggestions,
@@ -198,11 +291,29 @@ def tool_query_location(payload: ToolLocationRequest, db: Session = Depends(get_
             "reference_locations": []
         }
 
-    # 情況 4：difflib 找到多個近似結果，請 Agent 向使用者確認
+    # 情況 4：difflib 找到多個近似結果，先以分數排序，若最佳明顯勝出就直接補全
     if len(close_matches) > 1:
+        def diff_score(name):
+            return difflib.SequenceMatcher(None, keyword.lower(), name.lower()).ratio()
+
+        scored_diff = sorted(
+            [(name, diff_score(name)) for name in close_matches],
+            key=lambda x: x[1],
+            reverse=True
+        )
+        best_name_d, best_score_d = scored_diff[0]
+        second_score_d = scored_diff[1][1] if len(scored_diff) > 1 else 0.0
+
+        if best_score_d >= 0.5 and (best_score_d - second_score_d) >= 0.2:
+            return {
+                "status": "success",
+                "full_location_name": best_name_d,
+                "reference_locations": []
+            }
+
         return {
             "status": "needs_clarification",
-            "suggestions": close_matches,
+            "suggestions": [name for name, _ in scored_diff[:3]],
             "message": f"找到多個相似地點：{', '.join(close_matches)}。請向使用者確認是哪一個。",
             "reference_locations": []
         }
@@ -308,8 +419,8 @@ def tool_submit_and_generate(payload: ToolSubmitRequest, db: Session = Depends(g
     )
 
     filename = generate_ppt(full_data, new_log.log_id)
-    # 使用相對路徑，讓前端透過 nginx 反向代理存取，避免直接曝露後端位址
-    download_url = f"/downloads/{filename}"
+    # 使用需認證的 API 路徑，確保只有本人能下載
+    download_url = f"/api/v1/downloads/{filename}"
     
     new_log.generated_file_url = download_url
     db.commit()

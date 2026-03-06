@@ -15,10 +15,9 @@ services:
       - ./data:/app/data
       # PPT 模板
       - ./templates:/app/templates
-      # PPT 產出檔案持久化
-      - backend-downloads:/app/backend/downloads
+      # PPT 檔案持久化（bind mount，直接對應 host 目錄，方便備份與查看）
+      - ./backend/downloads:/app/backend/downloads
     env_file:
       - .env
 
-volumes:
-  backend-downloads:
+# volumes:  # backend-downloads named volume 已改為 bind mount
