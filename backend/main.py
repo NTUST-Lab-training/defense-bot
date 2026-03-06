@@ -225,9 +225,28 @@ def tool_query_location(payload: ToolLocationRequest, db: Session = Depends(get_
             "reference_locations": []
         }
 
-    # 情況 2：找到多筆，請 Agent 向使用者確認
+    # 情況 2：找到多筆，先以相似度排序，若最佳結果明顯勝出就直接補全
     if len(locations) > 1:
-        suggestions = [loc.full_location_name for loc in locations[:3]]
+        def similarity(name):
+            return difflib.SequenceMatcher(None, keyword.lower(), name.lower()).ratio()
+
+        scored = sorted(
+            [(loc.full_location_name, similarity(loc.full_location_name)) for loc in locations],
+            key=lambda x: x[1],
+            reverse=True
+        )
+        best_name, best_score = scored[0]
+        second_score = scored[1][1] if len(scored) > 1 else 0.0
+
+        # 最佳結果得分 >= 0.5 且 明顯高於第二名（差距 >= 0.2），視為唯一命中
+        if best_score >= 0.5 and (best_score - second_score) >= 0.2:
+            return {
+                "status": "success",
+                "full_location_name": best_name,
+                "reference_locations": []
+            }
+
+        suggestions = [name for name, _ in scored[:3]]
         return {
             "status": "needs_clarification",
             "suggestions": suggestions,
@@ -246,11 +265,29 @@ def tool_query_location(payload: ToolLocationRequest, db: Session = Depends(get_
             "reference_locations": []
         }
 
-    # 情況 4：difflib 找到多個近似結果，請 Agent 向使用者確認
+    # 情況 4：difflib 找到多個近似結果，先以分數排序，若最佳明顯勝出就直接補全
     if len(close_matches) > 1:
+        def diff_score(name):
+            return difflib.SequenceMatcher(None, keyword.lower(), name.lower()).ratio()
+
+        scored_diff = sorted(
+            [(name, diff_score(name)) for name in close_matches],
+            key=lambda x: x[1],
+            reverse=True
+        )
+        best_name_d, best_score_d = scored_diff[0]
+        second_score_d = scored_diff[1][1] if len(scored_diff) > 1 else 0.0
+
+        if best_score_d >= 0.5 and (best_score_d - second_score_d) >= 0.2:
+            return {
+                "status": "success",
+                "full_location_name": best_name_d,
+                "reference_locations": []
+            }
+
         return {
             "status": "needs_clarification",
-            "suggestions": close_matches,
+            "suggestions": [name for name, _ in scored_diff[:3]],
             "message": f"找到多個相似地點：{', '.join(close_matches)}。請向使用者確認是哪一個。",
             "reference_locations": []
         }
