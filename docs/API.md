@@ -2,7 +2,7 @@
 
 * **Base URL**: `http://localhost:8088`
 * **API Prefix**: `/api/v1`
-* **互動式文件**: `http://localhost:8088/docs` (Swagger UI)
+* **互動式文件**: `http://<BACKEND_HOST_OR_IP>:8088/docs`（或 `https://<BACKEND_PUBLIC_DOMAIN_OR_IP>/docs`，Swagger UI）
 
 ---
 
@@ -48,7 +48,7 @@
 ### 3. 取得歷史口試紀錄 (Get My History)
 * **Endpoint**: `GET /api/v1/defense/history`
 * **Auth Required**: **Yes** (`x-student-id` in Header)
-* **說明**: 取得該學生過去生成的所有口試佈告草稿與下載連結，供前端實作「歷史紀錄儀表板」。回傳結果依建立時間降冪排序。`download_url` 回傳相對路徑（如 `/downloads/filename.pptx`），請透過前端 nginx 反向代理存取。
+* **說明**: 取得該學生過去生成的所有口試佈告草稿與下載連結，供前端實作「歷史紀錄儀表板」。回傳結果依建立時間降冪排序。`download_url` 回傳需身份驗證的下載端點路徑（如 `/api/v1/downloads/filename.pptx`）。
 * **Response**:
 ```json
 [
@@ -57,7 +57,7 @@
     "created_at": "2026-02-26T14:30:00",
     "defense_date": "民國115年3月4日(星期三)",
     "location": "第二教學大樓 T2-202會議室",
-    "download_url": "/downloads/defense_M11402165_1.pptx"
+    "download_url": "/api/v1/downloads/defense_M11402165_1.pptx"
   }
 ]
 ```
@@ -215,17 +215,39 @@
 {
   "status": "success",
   "message": "PPT 佈告已順利生成！",
-  "download_url": "/downloads/defense_M11402165_1.pptx"
+  "download_url": "/api/v1/downloads/defense_M11402165_1.pptx"
 }
 ```
 
-> **注意**：`download_url` 回傳**相對路徑**，學生需透過前端 nginx 反向代理存取。舊有絕對路徑已在歷史紀錄 API 自動正規化為相對路徑。
+> **注意**：`download_url` 回傳需身份驗證的 API 路徑，學生透過前端傳遞 `x-student-id` Header 後可下載。
+
+---
+
+## 前端專屬 API（續）
+
+### 5. 認證下載 PPT 檔案 (Authenticated Download)
+* **Endpoint**: `GET /api/v1/downloads/{filename}`
+* **Auth Required**: **Yes** (`x-student-id` in Header)
+* **說明**: 需身份驗證的 PPT 下載端點。系統會驗證該學號是否為 PPT 的所有者，只允許學生下載自己生成的檔案。前端應透過此端點搭配 `x-student-id` Header 進行下載。
+* **Parameters**:
+
+| 名稱 | 位置 | 型別 | 說明 |
+|------|------|------|------|
+| `filename` | URL Path | `string` | 要下載的 PPT 檔案名稱（例如 `defense_M11402165_1.pptx`） |
+| `x-student-id` | Header | `string` | 學生學號，用於驗證下載權限 |
+
+* **Response**:
+  - **成功 (200)**: 回傳 PPT 檔案（MIME 類型：`application/vnd.openxmlformats-officedocument.presentationml.presentation`）
+  - **無權限 (403)**: `{"detail": "無權限存取此檔案"}`
+  - **檔案不存在 (404)**: `{"detail": "檔案不存在"}`
+  - **未登入 (401)**: `{"detail": "未登入或缺乏身份憑證"}`
 
 ---
 
 ## 靜態檔案服務 (Static File Serving)
-生成的 PPT 檔案存放於 `backend/downloads/` 目錄，透過 FastAPI `StaticFiles` 掛載於 `/downloads` 路徑。學生不直接呼叫後端埠號，而是透過前端 nginx 反向代理的 `/downloads/` 路徑存取。
-* **路徑格式**: `GET /downloads/{filename}`
-* **範例**: `/downloads/defense_M11402165_1.pptx`
+生成的 PPT 檔案存放於 `backend/downloads/` 目錄，透過身份驗證的 `/api/v1/downloads/{filename}` 端點提供下載。前端應使用此端點搭配 `x-student-id` Header 進行檔案下載，確保用戶只能下載自己的檔案。
+* **存放位置**: `backend/downloads/{filename}`
+* **下載格式**: `GET /api/v1/downloads/{filename}` (需 `x-student-id` Header)
+* **檔案名稱規則**: `defense_{學號}_{log_id}.pptx` (例如 `defense_M11402165_1.pptx`)
 
 > Linux 環境下已在程式層主動註冊 `.pptx` 的 MIME 類型 (`application/vnd.openxmlformats-officedocument.presentationml.presentation`)，避免某些 Linux 底層 mimetypes 資料庫不完整導致回傳 `text/plain`。
