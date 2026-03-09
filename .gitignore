@@ -15,4 +15,3 @@ __pycache__/
 .DS_Store
 data/*.db
 backend/downloads/
-說明.md
