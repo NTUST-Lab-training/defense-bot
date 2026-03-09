@@ -152,11 +152,15 @@
 * **Endpoint**: `POST /api/v1/tool/query_committee`
 * **Auth Required**: **No** (Dify Agent 直接呼叫)
 * **說明**: 接收學生學號與粗略的委員名字清單，執行以下防禦性邏輯：
-  1. 以 `difflib.get_close_matches` (cutoff=0.6) 進行模糊比對，自動糾錯並補全職稱與系所。
-  2. 偵測名字中含有「系」「所」「公司」等關鍵字的外部委員，保留原字串不比對。
-  3. **強制自動補入指導教授**（即使使用者未提及）。
-  4. 回傳 `unmatched_names`（完全無法匹配的名字）與 `reference_roster`（全校教授名冊），讓 LLM 自行進行第二輪諧音糾錯。
-  5. 回傳 `is_valid_count` 旗標，標示委員人數是否已達到 3 人門檻。
+  1. 先做職稱解析（如「教授 / 副教授 / 博士」），避免把職稱誤當姓名。
+  2. 以混合相似度（`difflib` + 字元重疊 + n-gram）做模糊比對，自動糾錯並補全職稱與系所。
+  3. 若輸入已含職稱與單位線索（如「某某教授 某某系」），直接視為外部/業界成員加入 `external_members`。
+  4. 對於已有職稱但缺單位的名字（如「張忠謀教授」），若 `difflib` 分數偏低，直接回傳 `needs_manual_profile` 與 `manual_profile_requirements: {"張忠謀教授": ["organization"]}`，避免 LLM 重複詢問候選。
+  5. 對於其他 `difflib` 分數偏低且無法直接命中的名字，回傳 `llm_compare_required`、`candidate_matches` 與 `reference_roster_lite`（精簡候選）供 LLM 自行糾錯判斷（不問使用者），避免每次都掃全量名冊。
+  6. 對於完全無線索的名字，回傳 `needs_manual_profile` 與 `manual_profile_requirements`（缺少 `title` 或 `organization`），引導 Agent 精準追問缺項。
+  6. **強制自動補入指導教授**（即使使用者未提及）。
+  7. 回傳 `next_action`、`required_profile_fields`、`agent_hint`，引導對話進入「候選確認 / 補填資料」流程。
+  8. 回傳 `is_valid_count` 旗標，標示委員人數是否已達到 3 人門檻。
 * **Request Body**:
 ```json
 {
@@ -174,6 +178,15 @@
     "呂政修 教授 (臺灣科技大學電子工程系)"
   ],
   "unmatched_names": [],
+  "external_members": [],
+  "needs_manual_profile": [],
+  "manual_profile_requirements": {},
+  "candidate_matches": {},
+  "reference_roster_lite": [],
+  "llm_compare_required": [],
+  "next_action": "continue_checklist",
+  "required_profile_fields": ["name", "title", "organization"],
+  "agent_hint": "若 llm_compare_required 非空，請先依 candidate_matches 與上下文自行判斷最可能的教授並直接採用；僅在無合理候選時才改走補資料流程。若 needs_manual_profile 非空，請只詢問 manual_profile_requirements 指定的缺少欄位，避免重複詢問是否為校內名冊教授。",
   "reference_roster": [
     "呂政修 教授 (臺灣科技大學電子工程系)",
     "鄭瑞光 教授 (臺灣科技大學電子工程系)",

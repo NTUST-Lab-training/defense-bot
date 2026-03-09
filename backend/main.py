@@ -332,46 +332,309 @@ def tool_query_committee(payload: ToolCommitteeRequest, db: Session = Depends(ge
     if not student:
         return {"status": "error", "message": "查無此學生資料"}
 
-    raw_members = re.split(r'[，、,]+', payload.members)
-    members_list = [m.strip() for m in raw_members if m.strip()]
+    def split_members(raw_members_text: str):
+        text = (raw_members_text or "").strip()
+        if not text:
+            return []
+
+        # 先統一常見分隔符
+        text = re.sub(r"[，、,;；/｜|\n\t]+", ",", text)
+        chunks = [chunk.strip() for chunk in text.split(",") if chunk.strip()]
+
+        title_or_org_hints = [
+            "講座教授", "特聘教授", "助理教授", "副教授", "教授", "博士",
+            "系", "所", "公司", "院", "中心", "處", "局", "部", "大學", "學院", "研究室", "實驗室", "科大"
+        ]
+
+        members = []
+        for chunk in chunks:
+            # 僅在「看起來是多個純中文姓名」時，才用空白再切一次
+            if (
+                " " in chunk
+                and not re.search(r"[A-Za-z]", chunk)
+                and not re.search(r"[()（）\[\]{}【】]", chunk)
+                and not any(hint in chunk for hint in title_or_org_hints)
+            ):
+                spaced_parts = [part.strip() for part in re.split(r"\s+", chunk) if part.strip()]
+                if spaced_parts and all(re.fullmatch(r"[\u4e00-\u9fff]{2,4}", p) for p in spaced_parts):
+                    members.extend(spaced_parts)
+                    continue
+
+            members.append(chunk)
+
+        return members
+
+    members_list = split_members(payload.members)
 
     all_profs = db.query(models.Professor).all()
     prof_names = [p.professor_name for p in all_profs]
     prof_dict = {p.professor_name: p for p in all_profs}
+
+    title_keywords = ["講座教授", "特聘教授", "助理教授", "副教授", "教授", "博士"]
+    org_keywords = ["系", "所", "公司", "院", "中心", "處", "局", "部", "大學", "學院", "研究室", "實驗室", "科大"]
+
+    def normalize_member_text(s: str) -> str:
+        return re.sub(r"\s+", "", s or "")
+
+    def normalize_org_text(s: str) -> str:
+        org = (s or "").strip()
+        org = re.sub(r"^[\s:：,，、\-—]+|[\s:：,，、\-—]+$", "", org)
+
+        # 去除最外層括號，避免輸出時組成 ((單位))
+        while org and re.match(r"^[\(\[（【].*[\)\]）】]$", org):
+            stripped = re.sub(r"^[\(\[（【]\s*", "", org)
+            stripped = re.sub(r"\s*[\)\]）】]$", "", stripped)
+            stripped = stripped.strip()
+            if stripped == org:
+                break
+            org = stripped
+
+        return org
+
+    def parse_member(raw_text: str):
+        text = raw_text.strip()
+        detected_title = ""
+        for title in title_keywords:
+            if title in text:
+                detected_title = title
+                break
+
+        has_org_hint = any(k in text for k in org_keywords)
+
+        name_candidate = text
+        org_candidate = text
+
+        # 先嘗試「姓名 + 職稱」模式，避免把姓名與單位黏在一起
+        if detected_title:
+            m = re.search(rf"([\u4e00-\u9fff]{{2,4}})\s*{detected_title}", text)
+            if m:
+                name_candidate = m.group(1)
+                org_candidate = text.replace(m.group(0), "", 1)
+
+        if name_candidate == text:
+            for title in title_keywords:
+                name_candidate = name_candidate.replace(title, "")
+            name_candidate = re.sub(r"[()（）\[\]{}【】]", "", name_candidate)
+            name_candidate = re.sub(r"\s+", "", name_candidate)
+            name_candidate = re.sub(r"[^\u4e00-\u9fffA-Za-z]", "", name_candidate)
+
+            org_candidate = text
+            if name_candidate:
+                org_candidate = org_candidate.replace(name_candidate, "")
+            if detected_title:
+                org_candidate = org_candidate.replace(detected_title, "")
+
+        org_candidate = normalize_org_text(org_candidate)
+
+        return {
+            "raw": text,
+            "clean_name": name_candidate,
+            "detected_title": detected_title,
+            "has_org_hint": has_org_hint,
+            "org_candidate": org_candidate
+        }
+
+    def chinese_name_similarity(input_name: str, prof_name: str) -> float:
+        a = normalize_member_text(input_name)
+        b = normalize_member_text(prof_name)
+        if not a or not b:
+            return 0.0
+
+        seq_score = difflib.SequenceMatcher(None, a, b).ratio()
+
+        set_a = set(a)
+        set_b = set(b)
+        overlap_score = len(set_a & set_b) / max(1, len(set_a | set_b))
+
+        # 通用 n-gram 重疊，避免硬編碼特定姓名或字形規則
+        def ngrams(s: str, n: int = 2):
+            if len(s) < n:
+                return {s} if s else set()
+            return {s[i:i+n] for i in range(len(s) - n + 1)}
+
+        ngram_a = ngrams(a, 2)
+        ngram_b = ngrams(b, 2)
+        ngram_score = len(ngram_a & ngram_b) / max(1, len(ngram_a | ngram_b))
+
+        max_len = max(len(a), len(b))
+        position_acc = 0.0
+        for idx in range(min(len(a), len(b))):
+            if a[idx] == b[idx]:
+                position_acc += 1.0
+        position_score = position_acc / max(1, max_len)
+
+        return seq_score * 0.35 + overlap_score * 0.2 + ngram_score * 0.2 + position_score * 0.25
+
+    def get_prof_candidates(clean_name: str):
+        scored = sorted(
+            [(name, chinese_name_similarity(clean_name, name)) for name in prof_names],
+            key=lambda x: x[1],
+            reverse=True
+        )
+        return scored[:3]
+
+    def get_best_difflib_score(clean_name: str):
+        if not clean_name:
+            return "", 0.0
+        scored = sorted(
+            [(name, difflib.SequenceMatcher(None, normalize_member_text(clean_name), normalize_member_text(name)).ratio()) for name in prof_names],
+            key=lambda x: x[1],
+            reverse=True
+        )
+        return scored[0] if scored else ("", 0.0)
 
     #  準備一份完整的教授名冊，等一下要當作參考書丟給 LLM
     reference_roster = [f"{p.professor_name} {p.professor_title} ({p.department_name})" for p in all_profs]
 
     final_committee = []
     unmatched = []
+    external_members = []
+    needs_manual_profile = []
+    manual_profile_requirements = {}
+    candidate_matches = {}
+    candidate_roster_lite = []
+    llm_compare_required = []
+
+    # 預先計算指導教授的完整字串，讓迴圈中可以識別並跳過，統一交由底部補齊邏輯排在最末位
+    advisor_full = (
+        f"{student.advisor.professor_name} {student.advisor.professor_title} ({student.advisor.department_name})"
+        if student.advisor else None
+    )
 
     for raw_name in members_list:
-        clean_name = raw_name.replace("教授", "").replace("博士", "").replace("副教授", "").strip()
-        
-        if len(raw_name) >= 4 and any(k in raw_name for k in ["系", "所", "公司", "院", "中心", "處", "局", "部", " "]):
-            if raw_name not in final_committee:
-                final_committee.append(raw_name)
+        parsed = parse_member(raw_name)
+        clean_name = parsed["clean_name"]
+        detected_title = parsed["detected_title"]
+        has_org_hint = parsed["has_org_hint"]
+        org_candidate = parsed["org_candidate"]
+
+        if not clean_name:
+            unmatched.append(raw_name)
+            if raw_name not in needs_manual_profile:
+                needs_manual_profile.append(raw_name)
+                manual_profile_requirements[raw_name] = ["name", "title", "organization"]
             continue
-        matches = difflib.get_close_matches(clean_name, prof_names, n=1, cutoff=0.6)
-        if matches:
-            matched_prof = prof_dict[matches[0]]
+
+        # 顯性外部格式：已提供職稱且帶有單位線索，直接視為校外/業界委員
+        if detected_title and has_org_hint:
+            external_org = org_candidate if org_candidate else "未提供單位"
+            external_full = f"{clean_name} {detected_title} ({external_org})"
+            if external_full not in final_committee:
+                final_committee.append(external_full)
+                external_members.append(external_full)
+            continue
+
+        # 完全同名，直接命中
+        if clean_name in prof_dict:
+            matched_prof = prof_dict[clean_name]
             full_title = f"{matched_prof.professor_name} {matched_prof.professor_title} ({matched_prof.department_name})"
+            # 若比對到的是指導教授，跳過不加入，讓底部補齊邏輯統一排在最末位
+            if full_title == advisor_full:
+                continue
             if full_title not in final_committee:
                 final_committee.append(full_title)
-        else:
+            continue
+
+        candidates = get_prof_candidates(clean_name)
+        best_name, best_score = candidates[0]
+        second_score = candidates[1][1] if len(candidates) > 1 else 0.0
+        best_difflib_name, best_difflib_score = get_best_difflib_score(clean_name)
+
+        # 若已有職稱但缺單位，且 difflib 分數低，直接改走補資料流程，避免 LLM 再問使用者確認候選
+        if best_difflib_score < 0.5:
+            if detected_title and not has_org_hint:
+                unmatched.append(raw_name)
+                if raw_name not in needs_manual_profile:
+                    needs_manual_profile.append(raw_name)
+                    manual_profile_requirements[raw_name] = ["organization"]
+                continue
+
+            # 其他情況：準備精簡候選供 LLM 自行判斷（不問使用者）
             unmatched.append(raw_name)
 
-    if student.advisor:
-        advisor_full = f"{student.advisor.professor_name} {student.advisor.professor_title} ({student.advisor.department_name})"
-        if advisor_full not in final_committee:
-            final_committee.append(advisor_full)
+            llm_candidates = [name for name, score in candidates if score >= 0.35]
+            if not llm_candidates:
+                llm_candidates = [name for name, _ in candidates]
+
+            candidate_matches[raw_name] = [
+                f"{name} {prof_dict[name].professor_title} ({prof_dict[name].department_name})"
+                for name in llm_candidates
+            ]
+            for item in candidate_matches[raw_name]:
+                if item not in candidate_roster_lite:
+                    candidate_roster_lite.append(item)
+
+            if raw_name not in llm_compare_required:
+                llm_compare_required.append(raw_name)
+            continue
+
+        # 分數高且明顯領先，才直接採用
+        if best_score >= 0.6 and (best_score - second_score) >= 0.08:
+            matched_prof = prof_dict[best_name]
+            full_title = f"{matched_prof.professor_name} {matched_prof.professor_title} ({matched_prof.department_name})"
+            # 若比對到的是指導教授，跳過不加入，讓底部補齊邏輯統一排在最末位
+            if full_title == advisor_full:
+                continue
+            if full_title not in final_committee:
+                final_committee.append(full_title)
+            continue
+
+        unmatched.append(raw_name)
+
+        confident_candidates = [name for name, score in candidates if score >= 0.42]
+        candidate_matches[raw_name] = [
+            f"{name} {prof_dict[name].professor_title} ({prof_dict[name].department_name})"
+            for name in confident_candidates
+        ]
+        for item in candidate_matches[raw_name]:
+            if item not in candidate_roster_lite:
+                candidate_roster_lite.append(item)
+
+        is_likely_person_name = re.fullmatch(r"[\u4e00-\u9fff]{2,4}", clean_name) is not None
+        if is_likely_person_name and not confident_candidates and raw_name not in needs_manual_profile:
+            needs_manual_profile.append(raw_name)
+            missing_fields = []
+            if not detected_title:
+                missing_fields.append("title")
+            if not has_org_hint:
+                missing_fields.append("organization")
+            manual_profile_requirements[raw_name] = missing_fields if missing_fields else ["title", "organization"]
+
+    if advisor_full:
+        # 指導教授在迴圈中已被識別並跳過，此處直接附加到最末位
+        final_committee.append(advisor_full)
+
+    if needs_manual_profile:
+        next_action = "collect_member_profile"
+    elif llm_compare_required:
+        next_action = "llm_compare_candidates"
+    elif unmatched:
+        next_action = "confirm_candidate_matches"
+    else:
+        next_action = "continue_checklist"
+
+    # 選擇性回傳名冊：有候選人時只給候選名單，完全找不到時才給全名冊做諧音糾錯
+    if candidate_roster_lite:
+        return_reference_roster = candidate_roster_lite
+    else:
+        return_reference_roster = reference_roster
 
     return {
         "status": "success",
         "final_committee": final_committee,  
         "unmatched_names": unmatched,
-        # 把全校名單回傳給 LLM 讓他自己做諧音糾錯
-        "reference_roster": reference_roster,        
+        "external_members": external_members,
+        "needs_manual_profile": needs_manual_profile,
+        "manual_profile_requirements": manual_profile_requirements,
+        "candidate_matches": candidate_matches,
+        "reference_roster_lite": candidate_roster_lite,
+        "llm_compare_required": llm_compare_required,
+        "next_action": next_action,
+        "required_profile_fields": ["name", "title", "organization"],
+        "agent_hint": "若 llm_compare_required 非空，請先依 candidate_matches 與上下文自行判斷最可能的教授並直接採用；僅在無合理候選時才改走補資料流程。若 needs_manual_profile 非空，請只詢問 manual_profile_requirements 指定的缺少欄位，避免重複詢問是否為校內名冊教授。【重要】向使用者呈現委員名單時，請務必依照 final_committee 的順序排列，指導教授（advisor_info）永遠排在最後一位。",
+        "reference_roster": return_reference_roster,
+        # 指導教授資訊，提示 LLM 呈現順序時必須排最後
+        "advisor_info": advisor_full,
         "is_valid_count": len(final_committee) >= 3,
         "current_count": len(final_committee)
     }
@@ -386,6 +649,22 @@ def tool_submit_and_generate(payload: ToolSubmitRequest, db: Session = Depends(g
         
     raw_committee = re.split(r'[，、,]+', payload.final_committee_str)
     final_committee_list = [m.strip() for m in raw_committee if m.strip()]
+
+    # 最終防線：無論 LLM 傳入的順序為何，強制確保指導教授排在委員名單最末位
+    if student.advisor:
+        advisor_full_submit = f"{student.advisor.professor_name} {student.advisor.professor_title} ({student.advisor.department_name})"
+        # 尋找名單中是否有包含指導教授姓名的項目（容錯：格式可能略有不同）
+        advisor_idx = next(
+            (i for i, m in enumerate(final_committee_list)
+             if student.advisor.professor_name in m),
+            None
+        )
+        if advisor_idx is not None:
+            # 已存在：移到最後
+            final_committee_list.append(final_committee_list.pop(advisor_idx))
+        else:
+            # 不存在：補入最後（以資料庫標準格式）
+            final_committee_list.append(advisor_full_submit)
 
     try:
         dt = datetime.strptime(payload.defense_date, "%Y-%m-%d")
