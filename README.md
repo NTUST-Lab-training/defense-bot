@@ -26,7 +26,7 @@
 ---
 
 ##  系統架構 (System Architecture)
-本專案採用 **全本地部署 (Local Deployment)** 策略，由三個獨立容器（Frontend nginx、Backend FastAPI、Dify Agent）組成，各自透過 Docker 部署。前端 nginx 同時負責 HTTPS 反向代理，將 `/api/` 與 `/downloads/` 路徑轉發至後端，避免直接曝露後端位址。使用者透過 SPA 發送訊息，由 FastAPI 代理轉發至 Dify Agent，Dify Agent 再以 ReAct 工作流**回呼**後端的三支 Tool API 完成任務。
+本專案採用 **可對外部署 (Internet-facing)** 架構，由三個獨立服務（Frontend nginx、Backend FastAPI、Dify Agent）組成，可分別部署在不同主機或不同 Docker 網路。前端 nginx 提供 HTTPS 反向代理與靜態資源服務。使用者透過 SPA 發送訊息，由 FastAPI 代理轉發至 Dify Agent，Dify Agent 再以 ReAct 工作流**回呼**後端的三支 Tool API 完成任務。PPT 下載透過身份驗證的 `/api/v1/downloads/` 端點進行，確保用戶只能下載自己的檔案。
 
 ```mermaid
 graph TD
@@ -41,7 +41,6 @@ graph TD
     end
 
     Nginx <-->|"/api/* 轉發"| Backend
-    Nginx -->|"/downloads/* 轉發"| DL
 
     subgraph BackendContainer["Backend Container (FastAPI 防禦性後端)"]
         Backend[FastAPI Server]
@@ -49,12 +48,14 @@ graph TD
         LocAPI["POST /api/v1/tool/query_location"]
         ComAPI["POST /api/v1/tool/query_committee"]
         GenAPI["POST /api/v1/tool/submit_and_generate"]
+        DownAPI["GET /api/v1/downloads<br/>(身份驗證)"]
 
         LocAPI --> DB[(SQLite DB)]
         ComAPI --> DB
         GenAPI --> DB
         GenAPI --> PPT[python-pptx 生成引擎]
-        PPT --> DL["StaticFiles /downloads/"]
+        PPT --> DL["檔案存儲<br/>backend/downloads/"]
+        DownAPI --> DL
     end
 
     Backend -->|"POST 轉發對話 (HTTP)"| Dify
@@ -62,11 +63,11 @@ graph TD
     Dify --"Tool 2: 委員糾錯與補齊"--> ComAPI
     Dify --"Tool 3: 儲存並生成 PPT"--> GenAPI
 ```
-* **前端**: React + Vite SPA（對話介面 + 儀表板），由 nginx 容器獨立服務，負責 HTTP→HTTPS 強制重導、TLS 終端與 API/靜態檔案反向代理
+* **前端**: React + Vite SPA（對話介面 + 儀表板），由 nginx 容器獨立服務，負責 HTTP→HTTPS 強制重導、TLS 終端與 API 反向代理
 * **AI Agent**: Dify（獨立部署，負責語意理解、Slot Filling、ReAct 工具呼叫，透過 HTTP 回呼後端 Tool API）
-* **Backend**: Python FastAPI（負責身分驗證、資料洗滌、兩階段 Fuzzy Search、PPT 渲染、Dify 代理轉發）
-* **Database**: SQLite（輕量化單檔儲存，包含學生、教授、地點及歷史生成紀錄）
-* **靜態檔案**: 生成的 PPT 存放於後端 `backend/downloads/`，以相對路徑 `/downloads/{filename}` 回傳，使用者透過前端 nginx 反向代理的 `/downloads/` 路徑下載（nginx 再轉發至後端 StaticFiles）
+* **Backend**: Python FastAPI（負責身分驗證、資料洗滌、兩階段 Fuzzy Search、PPT 渲染、Dify 代理轉發、檔案下載驗證）
+* **Database**: SQLite（輕量化單檔儲存，包含學生、教授、地點及歷史生成紀錄）  
+* **靜態檔案**: 生成的 PPT 存放於後端 `backend/downloads/`，透過身份驗證的 `/api/v1/downloads/{filename}` 端點提供下載（需 `x-student-id` Header），前端 nginx 再轉發至後端
 
 ---
 
@@ -79,6 +80,7 @@ graph TD
 | `GET` | `/api/v1/students/me` | 取得當前登入學生的個人資料與論文題目 | `x-student-id` Header |
 | `GET` | `/api/v1/defense/history` | 取得該學生的口試佈告歷史紀錄與下載連結 | `x-student-id` Header |
 | `POST` | `/api/v1/chat` | 對話代理：將使用者訊息轉發至 Dify Agent 並回傳結果 | `x-student-id` Header |
+| `GET` | `/api/v1/downloads/{filename}` | 下載 PPT 檔案，需身份驗證確保只能下載自己的檔案 | `x-student-id` Header |
 
 ### Dify Agent 專用 Tool API (ReAct 工作流)
 | 方法 | 端點 | 說明 |
@@ -110,9 +112,9 @@ cp .env.example .env
 主要環境變數說明：
 | 變數名稱 | 說明 | 預設值 |
 |----------|------|--------|
-| `SERVER_URL` | FastAPI Swagger UI 顯示的 API 伺服器根網址（不影響 PPT 下載，下載連結一律以相對路徑回傳） | `https://localhost:8088` |
+| `SERVER_URL` | FastAPI Swagger UI 顯示的 API 伺服器根網址 | `http://<BACKEND_HOST_OR_IP>` |
 | `DIFY_API_KEY` | Dify Agent 的 API 金鑰 | (需手動填入) |
-| `DIFY_API_URL` | Dify Chat API 端點 | `http://localhost:8080/v1/chat-messages` |
+| `DIFY_API_URL` | Dify Chat API 端點（請填 Dify 可達位址） | `http://<DIFY_HOST_OR_IP>:8080/v1/chat-messages` |
 
 ### 3. 一鍵部署 (One-Click Deploy)
 執行安裝腳本，系統將自動建置後端 Docker 映像檔並啟動 FastAPI 服務：
@@ -124,19 +126,22 @@ chmod +x install.sh
 
 ### 4. 驗證服務
 部署完成後，請訪問：
-* **Backend API 文件**: `http://localhost:8088/docs` (請使用 Header 注入 `x-student-id` 進行測試)
-* **Dify 控制台**: 請依據您的 Dify 部署方式自行訪問（例如 `http://localhost/`，首次登入需註冊管理員）
+* **Backend API 文件**: `http://<BACKEND_HOST_OR_IP>:8088/docs`
+* **Dify 控制台**: `http://<DIFY_HOST_OR_IP>:8080`
 
 ---
 
 ##  Dify 設定指南 (重要！)
 由於 Dify 的安全性設計與本系統的 Tool API 架構，您需要手動將後端 API 註冊到 Dify 中，讓 Agent 能呼叫三支工具：
 
-1. **取得 API 規格**: 瀏覽器開啟 `http://localhost:8088/openapi.json`，複製完整內容。
+1. **取得 API 規格**: 瀏覽器開啟 `http://<BACKEND_HOST_OR_IP>:8088/openapi.json`，複製完整內容。
 2. **建立自定義工具**:
    * 登入 Dify > 工具 (Tools) > 自定義 (Custom) > 創建自定義工具。
    * **Schema**: 貼上剛複製的 OpenAPI JSON（系統會自動識別出三支 Tool：`query_location`、`query_committee`、`submit_and_generate`）。
-   * **Server URL**: 輸入 `http://defense-bot-backend:8088`（Docker 內部網路名稱，請勿使用 localhost）。
+        * **Server URL（分離網路部署）**：請直接填後端可達位址
+            * 本地 IP：`http://<BACKEND_HOST_OR_IP>`
+            * 對外 IP：`https://<BACKEND_PUBLIC_DOMAIN_OR_IP>`
+        * `localhost` 與 `defense-bot-backend` 在分離網路下通常不可用，請勿填入。
 3. **匯入機器人流程**:
    * 建立一個新的 Chatflow 應用。
    * 點擊右上角選單 > 匯入 DSL。
