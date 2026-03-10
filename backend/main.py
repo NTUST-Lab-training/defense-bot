@@ -601,8 +601,9 @@ def tool_query_committee(payload: ToolCommitteeRequest, db: Session = Depends(ge
             manual_profile_requirements[raw_name] = missing_fields if missing_fields else ["title", "organization"]
 
     if advisor_full:
-        # 指導教授在迴圈中已被識別並跳過，此處直接附加到最末位
-        final_committee.append(advisor_full)
+        # 指導教授在迴圈中已被識別並跳過，此處直接附加到最末位（防重複）
+        if advisor_full not in final_committee:
+            final_committee.append(advisor_full)
 
     if needs_manual_profile:
         next_action = "collect_member_profile"
@@ -613,11 +614,8 @@ def tool_query_committee(payload: ToolCommitteeRequest, db: Session = Depends(ge
     else:
         next_action = "continue_checklist"
 
-    # 選擇性回傳名冊：有候選人時只給候選名單，完全找不到時才給全名冊做諧音糾錯
-    if candidate_roster_lite:
-        return_reference_roster = candidate_roster_lite
-    else:
-        return_reference_roster = reference_roster
+    # 固定同時回傳兩種名冊：精簡候選（reference_roster_lite）+ 完整全名冊（reference_roster）
+    return_reference_roster = reference_roster
 
     return {
         "status": "success",
